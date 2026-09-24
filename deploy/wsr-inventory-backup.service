@@ -1,0 +1,11 @@
+[Unit]
+Description=Warp Speed Racing Inventory — nightly backup
+After=wsr-inventory.service
+
+[Service]
+Type=oneshot
+User=wsr-app
+Group=wsr-app
+WorkingDirectory=/opt/wsr-inventory/current
+EnvironmentFile=/opt/wsr-inventory/.env
+ExecStart=/usr/bin/npx tsx scripts/backup.ts

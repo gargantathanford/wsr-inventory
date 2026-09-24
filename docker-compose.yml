@@ -1,0 +1,114 @@
+# Usage:
+#   1. cp .env.example .env, then set a real SESSION_SECRET
+#      (openssl rand -base64 48) — do NOT ship the placeholder value.
+#   2. First run only — initialize the production database (real subsystems,
+#      one real admin account, no demo data). This runs once via the `seed`
+#      service below, which uses the `builder` stage (has devDependencies,
+#      including tsx) rather than the slim runtime image:
+#        ADMIN_EMAIL=you@warpspeedracing.org ADMIN_NAME="Your Name" \
+#          docker compose run --rm seed
+#      Copy the printed password immediately — it's shown once.
+#   3. docker compose up -d app
+#   4. curl http://localhost:3000/api/health
+#
+# This file runs the app only — TLS termination is still handled by Caddy or
+# nginx on the host in front of this container (see deploy/Caddyfile,
+# deploy/nginx.conf), same as the non-Docker deployment path in DEPLOYMENT.md.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set in .env — see .env.example}
+      PORT: 3000
+    volumes:
+      - wsr-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # One-off: `docker compose run --rm seed`. Not part of `up` — this only runs
+  # when invoked explicitly, and initializing an already-populated database is
+  # a safe no-op (scripts/seed-production.ts refuses if users already exist).
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /app
+    # Runs via docker-entrypoint.sh: starts root, fixes volume ownership, then
+    # drops to uid 1001 before running the seed. This is what makes the same
+    # config work on both Docker Desktop (Mac) and a Linux host.
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    command: ["npx", "tsx", "scripts/seed-production.ts"]
+    environment:
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_NAME: ${ADMIN_NAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - wsr-data:/app/data
+
+  # One-off: `docker compose run --rm backup`. Online backup of wsr-data (SQLite
+  # backup API — safe while `app` is running) into ./backups on the host. The
+  # entrypoint chowns /app/backups to 1001 and drops privileges, so backup files
+  # are owned by uid 1001. `profiles` keeps this out of a bare `docker compose up`.
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    profiles: ["tools"]
+    working_dir: /app
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh", "npx", "tsx", "scripts/backup.ts"]
+    command: []
+    environment:
+      BACKUP_RETAIN_COUNT: ${BACKUP_RETAIN_COUNT:-14}
+    volumes:
+      - wsr-data:/app/data
+      - ./backups:/app/backups
+
+  # One-off, app STOPPED: `docker compose stop app` first, then
+  #   docker compose run --rm restore              # lists timestamps
+  #   docker compose run --rm restore <timestamp>
+  # A trailing argument replaces `command` and is appended to the entrypoint, so
+  # the timestamp lands as the script's argv[2].
+  restore:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    profiles: ["tools"]
+    working_dir: /app
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh", "npx", "tsx", "scripts/restore.ts"]
+    command: ["--list"]
+    volumes:
+      - wsr-data:/app/data
+      - ./backups:/app/backups
+
+  # One-off maintenance shell with devDependencies available (tsx), sharing the
+  # app's data volume and the host ./backups folder.
+  maint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    profiles: ["tools"]
+    working_dir: /app
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    command: ["sh"]
+    volumes:
+      - wsr-data:/app/data
+      - ./backups:/app/backups
+
+volumes:
+  wsr-data:

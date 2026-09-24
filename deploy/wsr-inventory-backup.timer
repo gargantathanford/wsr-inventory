@@ -1,0 +1,18 @@
+# Runs the backup nightly at 3:15am server time.
+#
+# Setup (after wsr-inventory-backup.service is installed):
+#   sudo cp deploy/wsr-inventory-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wsr-inventory-backup.timer
+#   Verify: systemctl list-timers | grep wsr-inventory
+
+[Unit]
+Description=Nightly backup timer for Warp Speed Racing Inventory
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

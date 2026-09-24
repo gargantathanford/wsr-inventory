@@ -1,0 +1,44 @@
+# Process supervision for the app. Without this, a crash or a server reboot
+# leaves the dashboard offline until someone notices and manually restarts it.
+#
+# Setup:
+#   1. Build the app first: npm ci && npm run build
+#      This produces .next/standalone/ — that's what ExecStart below runs.
+#      Copy .next/static and data/ into .next/standalone/ after building
+#      (see DEPLOYMENT.md step-by-step — the build script does this for you).
+#   2. Edit the paths and User below to match the real deployment location
+#      and the unprivileged user the app should run as (never run as root).
+#   3. Create /opt/wsr-inventory/.env with SESSION_SECRET and NODE_ENV=production
+#      (see .env.example) — do NOT put secrets directly in this unit file if
+#      it will ever be checked into version control.
+#   4. sudo cp deploy/wsr-inventory.service /etc/systemd/system/
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now wsr-inventory
+#   5. Check status: sudo systemctl status wsr-inventory
+#      Check logs:    sudo journalctl -u wsr-inventory -f
+
+[Unit]
+Description=Warp Speed Racing Inventory & Procurement Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=wsr-app
+Group=wsr-app
+WorkingDirectory=/opt/wsr-inventory/current/.next/standalone
+EnvironmentFile=/opt/wsr-inventory/.env
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+# If the app crash-loops (e.g. a bad deploy), stop retrying after 5 attempts
+# in 60 seconds rather than hammering the host indefinitely.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Basic sandboxing — the app only needs to read/write its own data directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/wsr-inventory/current/.next/standalone/data /opt/wsr-inventory/current/.next/standalone/backups
+
+[Install]
+WantedBy=multi-user.target

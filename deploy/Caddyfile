@@ -1,0 +1,42 @@
+# Caddy config for hosting this app at a subdomain of warpspeedracing.com.
+#
+# Caddy handles TLS automatically (obtains and renews a Let's Encrypt cert for
+# the hostname below the first time it starts) — no separate certbot step
+# needed. This is the recommended option if the host has Caddy available.
+#
+# 1. Replace the placeholder hostname below with the real subdomain
+#    (e.g. dashboard.warpspeedracing.com). DNS for that hostname must already
+#    point at this server (an A/AAAA record, or CNAME if this is behind
+#    another proxy) — that DNS change is made wherever warpspeedracing.com's
+#    domain is managed, not here.
+# 2. Copy this file to /etc/caddy/Caddyfile (or `import` it from there).
+# 3. `sudo systemctl reload caddy` (or `sudo systemctl enable --now caddy`
+#    if it isn't running yet).
+#
+# The app itself must already be running on the port below — see
+# deploy/wsr-inventory.service.
+
+dashboard.warpspeedracing.com {
+	# This app never uses next/image, but the endpoint exists in every Next.js
+	# server by default. Block it here as a second layer on top of
+	# `images: { unoptimized: true }` in next.config.mjs — closes the
+	# Image Optimization API advisories in `npm audit` without needing a
+	# major Next.js version migration to reach a fully-patched release.
+	@nextImage path /_next/image*
+	respond @nextImage 404
+
+	reverse_proxy localhost:3000
+
+	encode gzip
+
+	header {
+		# Caddy already terminates TLS; these are additional response
+		# headers on top of what the app itself already sets in middleware.ts.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	log {
+		output file /var/log/caddy/wsr-inventory-access.log
+		format json
+	}
+}

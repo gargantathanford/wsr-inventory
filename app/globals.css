@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-graphite-950 text-graphite-100 antialiased;
+    font-feature-settings: "tnum" 1, "cv11" 1;
+  }
+  ::selection {
+    background-color: theme("colors.signal.DEFAULT");
+    color: #0A0C0E;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-graphite-900 border border-graphite-700/60 rounded-md shadow-panel;
+  }
+  .data-label {
+    @apply text-[11px] tracking-wide text-graphite-400 font-mono;
+  }
+  .stat-figure {
+    @apply font-mono text-4xl font-semibold tabular-nums text-graphite-100;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-mono font-medium border;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-sm bg-signal px-3.5 py-2 text-sm font-medium text-graphite-950 hover:bg-signal-bright transition-colors disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded-sm border border-graphite-600 px-3.5 py-2 text-sm font-medium text-graphite-200 hover:border-graphite-400 hover:text-white transition-colors;
+  }
+  .input {
+    @apply w-full rounded-sm bg-graphite-850 border border-graphite-600 px-3 py-2 text-sm text-graphite-100 placeholder:text-graphite-500 focus:outline-none focus:border-signal;
+  }
+  .table-shell {
+    @apply w-full text-sm border-collapse;
+  }
+  .table-shell th {
+    @apply text-left font-mono text-[11px] uppercase tracking-wide text-graphite-400 border-b border-graphite-700 px-3 py-2 sticky top-0 bg-graphite-900;
+  }
+  .table-shell td {
+    @apply px-3 py-2 border-b border-graphite-800 align-middle;
+  }
+  .table-shell tr:hover td {
+    @apply bg-graphite-850/60;
+  }
+}
