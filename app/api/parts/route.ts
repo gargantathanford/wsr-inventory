@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getAllParts } from "@/lib/queries";
+import { checkPartGates, DESIGN_STATUSES, SPONSOR_ASKS } from "@/lib/partRules";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -33,7 +34,24 @@ const PartInput = z.object({
   purchase_url: z.string().optional().nullable(),
   supplier: z.string().optional().nullable(),
   purchase_status: z.string().default("NEEDED"),
-  approval_status: z.string().default("APPROVED")
+  approval_status: z.string().default("APPROVED"),
+
+  // ---- v2 workbook fields ----
+  design_status: z.enum(DESIGN_STATUSES).default("PLACEHOLDER"),
+  // Cost is a range until a quote lands. estimated_cost stays the single
+  // working figure; if only the range is given, the midpoint is derived below.
+  estimated_cost_low: z.coerce.number().optional().nullable(),
+  estimated_cost_high: z.coerce.number().optional().nullable(),
+  governing_rule: z.string().max(500).optional().nullable(),
+  driving_target: z.string().max(300).optional().nullable(),
+  acceptance_criterion: z.string().max(1000).optional().nullable(),
+  // An empty select posts "", which is not a valid enum value — treat it as unset.
+  sponsor_ask: z.preprocess((v) => (v === "" || v == null ? null : v), z.enum(SPONSOR_ASKS).nullable()).optional(),
+  unit_of_measure: z.string().max(16).optional().nullable(),
+  allocated_mass_kg: z.coerce.number().optional().nullable(),
+  weight_kg: z.coerce.number().optional().nullable(),
+  required_by_date: z.string().max(32).optional().nullable(),
+  subteam_id: z.preprocess((v) => (v === "" ? null : v), z.string().nullable()).optional()
 });
 
 export async function POST(req: NextRequest) {
@@ -57,6 +75,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "You do not lead this subsystem." }, { status: 403 });
   }
 
+  // A new part cannot carry rule citations yet — they are attached from the
+  // part page once it exists — so a SELECTED/FROZEN part created in one step
+  // may satisfy the rule gate with the free-text governing_rule field.
+  const gates = checkPartGates({
+    design_status: data.design_status,
+    acceptance_criterion: data.acceptance_criterion,
+    cited_rule_count: 0,
+    governing_rule: data.governing_rule,
+    allocated_mass_kg: data.allocated_mass_kg,
+    weight_kg: data.weight_kg
+  });
+  if (gates.errors.length) {
+    return NextResponse.json({ error: gates.errors.join(" "), gate_errors: gates.errors }, { status: 422 });
+  }
+
+  // Keep the three cost figures consistent: a midpoint is derived when only the
+  // range was given, and a single figure fills an absent range.
+  const lo = data.estimated_cost_low ?? null;
+  const hi = data.estimated_cost_high ?? null;
+  const mid = data.estimated_cost ?? (lo != null && hi != null ? (lo + hi) / 2 : (lo ?? hi));
+
   const db = getDb();
   const id = newId("part");
   const now = new Date().toISOString();
@@ -65,11 +104,17 @@ export async function POST(req: NextRequest) {
       id, part_name, part_number, manufacturer, category, subsystem_id, description,
       quantity_required, quantity_owned, status, importance, priority_score,
       estimated_cost, lead_time_days, purchase_url, supplier, owner_user_id, requested_by,
-      purchase_status, approval_status, created_at, updated_at
+      purchase_status, approval_status, created_at, updated_at,
+      design_status, estimated_cost_low, estimated_cost_high, governing_rule, driving_target,
+      acceptance_criterion, sponsor_ask, unit_of_measure, allocated_mass_kg, weight_kg,
+      required_by_date, subteam_id
     ) VALUES (@id, @part_name, @part_number, @manufacturer, @category, @subsystem_id, @description,
       @quantity_required, @quantity_owned, @status, @importance, @priority_score,
       @estimated_cost, @lead_time_days, @purchase_url, @supplier, @owner_user_id, @requested_by,
-      @purchase_status, @approval_status, @created_at, @updated_at)`
+      @purchase_status, @approval_status, @created_at, @updated_at,
+      @design_status, @estimated_cost_low, @estimated_cost_high, @governing_rule, @driving_target,
+      @acceptance_criterion, @sponsor_ask, @unit_of_measure, @allocated_mass_kg, @weight_kg,
+      @required_by_date, @subteam_id)`
   ).run({
     id,
     part_name: data.part_name,
@@ -83,7 +128,7 @@ export async function POST(req: NextRequest) {
     status: data.status,
     importance: data.importance,
     priority_score: data.priority_score,
-    estimated_cost: data.estimated_cost ?? null,
+    estimated_cost: mid,
     lead_time_days: data.lead_time_days ?? null,
     purchase_url: data.purchase_url ?? null,
     supplier: data.supplier ?? null,
@@ -92,12 +137,26 @@ export async function POST(req: NextRequest) {
     purchase_status: data.purchase_status,
     approval_status: data.approval_status,
     created_at: now,
-    updated_at: now
+    updated_at: now,
+    design_status: data.design_status,
+    estimated_cost_low: lo,
+    estimated_cost_high: hi,
+    governing_rule: data.governing_rule ?? null,
+    driving_target: data.driving_target ?? null,
+    acceptance_criterion: data.acceptance_criterion ?? null,
+    sponsor_ask: data.sponsor_ask ?? null,
+    unit_of_measure: data.unit_of_measure ?? null,
+    allocated_mass_kg: data.allocated_mass_kg ?? null,
+    weight_kg: data.weight_kg ?? null,
+    required_by_date: data.required_by_date ?? null,
+    subteam_id: data.subteam_id ?? null
   });
 
   db.prepare(
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'CREATE', 'PART', ?, ?)`
   ).run(newId("log"), user.id, id, data.part_name);
 
-  return NextResponse.json({ id }, { status: 201 });
+  // Warnings are advisory — the part is already saved. The form surfaces them
+  // so a lead sees an over-allocation rather than discovering it at weigh-in.
+  return NextResponse.json({ id, warnings: gates.warnings }, { status: 201 });
 }
