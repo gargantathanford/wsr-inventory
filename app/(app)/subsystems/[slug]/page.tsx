@@ -5,7 +5,8 @@ import {
   getAllParts,
   getSubsystemMembers,
   getSubsystemTools,
-  getSubsystemDocuments
+  getSubsystemDocuments,
+  lineCost
 } from "@/lib/queries";
 import { ownershipPercent } from "@/lib/scoring";
 import { PartsTable } from "@/components/PartsTable";
@@ -24,7 +25,8 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
 
   const owned = parts.filter((p) => ["OWNED", "AVAILABLE_FOR_INSTALLATION", "INSTALLED"].includes(p.status)).length;
   const pct = parts.length > 0 ? Math.round((owned / parts.length) * 100) : 0;
-  const totalCost = parts.reduce((s, p) => s + (p.actual_cost ?? p.estimated_cost ?? 0), 0);
+  // Unit price x quantity required — see lineCost in lib/queries.
+  const totalCost = parts.reduce((s, p) => s + lineCost(p), 0);
 
   return (
     <div className="p-6 md:p-8 max-w-[1400px] mx-auto space-y-8">

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getPartsWithPriority } from "@/lib/queries";
+import { getPartsWithPriority, lineCost } from "@/lib/queries";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { ImportanceBadge } from "@/components/StatusBadge";
 import { ShoppingListStatusControls } from "@/components/ShoppingListStatusControls";
@@ -130,9 +130,20 @@ export default async function ShoppingListPage({ searchParams }: { searchParams:
                     >
                       {p.procurement_priority}
                     </span>
+                    <span className="block font-mono text-[10px] text-graphite-500">
+                      {p.procurement_priority_band === "NONE" ? "" : p.procurement_priority_band}
+                    </span>
                   </td>
                   <td className="text-right font-mono text-xs text-graphite-300">
-                    {p.estimated_cost != null ? `$${p.estimated_cost.toLocaleString()}` : "—"}
+                    {/* Line total (unit price x quantity), with the quoted range beneath it. */}
+                    {lineCost(p) > 0 ? `$${lineCost(p).toLocaleString()}` : "—"}
+                    {p.estimated_cost_low != null &&
+                    p.estimated_cost_high != null &&
+                    p.estimated_cost_high > p.estimated_cost_low ? (
+                      <span className="block text-[10px] text-graphite-500">
+                        ${lineCost(p, "low").toLocaleString()}–${lineCost(p, "high").toLocaleString()}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="text-right font-mono text-xs text-graphite-300">
                     {p.actual_cost != null ? `$${p.actual_cost.toLocaleString()}` : "—"}

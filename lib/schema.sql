@@ -17,8 +17,18 @@ CREATE TABLE IF NOT EXISTS subsystems (
   name TEXT UNIQUE NOT NULL,
   slug TEXT UNIQUE NOT NULL,
   description TEXT,
+  -- Three-letter code matching the parts-workbook tab (AER, BRK, CHS, ...).
+  -- The spreadsheet import joins on this, not on the English name, so a tab can
+  -- be renamed on either side without breaking the mapping.
+  code TEXT,
+  -- Share of the vehicle mass and build budget allocated to this subsystem,
+  -- as a fraction (0.26 = 26%). Set by the Chief Engineer; mirrors the
+  -- 'Vehicle Targets' tab of the parts workbook.
+  mass_share REAL,
+  budget_share REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subsystems_code ON subsystems(code) WHERE code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS subsystem_members (
   id TEXT PRIMARY KEY,
@@ -77,9 +87,39 @@ CREATE TABLE IF NOT EXISTS parts (
   )),
   approval_status TEXT NOT NULL DEFAULT 'APPROVED' CHECK (approval_status IN ('PENDING','APPROVED','REJECTED')),
   requested_by TEXT REFERENCES users(id),
+
+  -- ---- Parts-workbook fields (added v2) ----
+  -- Permanent line ID from the subsystem tab, e.g. 'PWT-001'. Never reused by
+  -- the workbook, so it is the join key for re-import. NULL for parts created
+  -- in the dashboard rather than imported.
+  sheet_ref TEXT,
+  -- Design maturity. A SEPARATE axis from purchase_status above: a part can be
+  -- design-FROZEN and purchase-NEEDED at the same time.
+  design_status TEXT NOT NULL DEFAULT 'PLACEHOLDER' CHECK (design_status IN (
+    'PLACEHOLDER','CANDIDATE','QUOTED','SELECTED','FROZEN'
+  )),
+  -- Cost is a range until a vendor quote lands. estimated_cost stays as the
+  -- single working figure (the midpoint); these two preserve the real spread.
+  -- All three are PER UNIT. Line cost is value x quantity_required.
+  estimated_cost_low REAL,
+  estimated_cost_high REAL,
+  -- FSAE rule clause(s) this part must satisfy, e.g. 'T.5.1; T.5.2'.
+  governing_rule TEXT,
+  -- Which vehicle target drives this line, e.g. 'Target peak power (hp)'.
+  driving_target TEXT,
+  -- Written definition of done. Required before design_status may reach SELECTED.
+  acceptance_criterion TEXT,
+  sponsor_ask TEXT CHECK (sponsor_ask IS NULL OR sponsor_ask IN ('CASH','IN_KIND','DISCOUNT','BUY')),
+  -- ea / lot / ft / sheet / part / hr. Without this, quantity_required is ambiguous.
+  unit_of_measure TEXT,
+  -- Target mass per unit assigned by the subsystem lead, against which the real
+  -- measured weight_kg is checked. Both per unit, both kilograms.
+  allocated_mass_kg REAL,
+
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_parts_sheet_ref ON parts(sheet_ref) WHERE sheet_ref IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS part_suppliers (
   id TEXT PRIMARY KEY,
@@ -411,7 +451,55 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Vehicle-level targets and assumptions, mirroring the 'Vehicle Targets' tab.
+-- Key/value rather than columns because the Chief Engineer adds targets over
+-- time and a schema change per target is not worth it.
+CREATE TABLE IF NOT EXISTS vehicle_targets (
+  id TEXT PRIMARY KEY,
+  target_key TEXT UNIQUE NOT NULL,          -- 'target_vehicle_mass_lb'
+  label TEXT NOT NULL,                      -- 'Target vehicle mass, no driver (lb)'
+  value_numeric REAL,
+  value_text TEXT,
+  unit TEXT,
+  source TEXT,                              -- 'Placeholder', 'Selected', 'User-stated goal'
+  is_placeholder INTEGER NOT NULL DEFAULT 1,
+  updated_by TEXT REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Interface register. part_dependencies is a bare (part, depends_on) pair and
+-- cannot carry priority, owner, due date or status, so the register gets its
+-- own table. Either side may be unresolved: the workbook seeds one side first.
+CREATE TABLE IF NOT EXISTS interfaces (
+  id TEXT PRIMARY KEY,
+  -- Register ID, e.g. 'CHS_SUS_001'. Permanent, never reused.
+  interface_ref TEXT UNIQUE NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P1','P2','P3')),
+  subsystem_a_id TEXT REFERENCES subsystems(id),
+  subsystem_b_id TEXT REFERENCES subsystems(id),
+  -- Resolved part rows once both sides are identified...
+  part_a_id TEXT REFERENCES parts(id) ON DELETE SET NULL,
+  part_b_id TEXT REFERENCES parts(id) ON DELETE SET NULL,
+  -- ...and the raw sheet refs, kept so an unresolved side is still visible.
+  part_a_ref TEXT,
+  part_b_ref TEXT,
+  description TEXT,
+  driver TEXT,                              -- rule / SES / freeze reason
+  owner_user_id TEXT REFERENCES users(id),
+  owner_name TEXT,                          -- unresolved owner text from the sheet
+  due_date TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','IN_WORK','AGREED','CLOSED')),
+  notes TEXT,
+  links TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_interfaces_priority ON interfaces(priority, status);
+CREATE INDEX IF NOT EXISTS idx_interfaces_part_a ON interfaces(part_a_id);
+CREATE INDEX IF NOT EXISTS idx_interfaces_part_b ON interfaces(part_b_id);
+
 CREATE INDEX IF NOT EXISTS idx_parts_subsystem ON parts(subsystem_id);
+CREATE INDEX IF NOT EXISTS idx_parts_design_status ON parts(design_status);
 CREATE INDEX IF NOT EXISTS idx_parts_status ON parts(status);
 CREATE INDEX IF NOT EXISTS idx_parts_purchase_status ON parts(purchase_status);
 CREATE INDEX IF NOT EXISTS idx_parts_importance ON parts(importance);

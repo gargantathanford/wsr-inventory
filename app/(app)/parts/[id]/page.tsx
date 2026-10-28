@@ -7,10 +7,11 @@ import {
   getPartTools,
   getPartDependencies,
   getPartDependents,
-  getPartProcedures
+  getPartProcedures,
+  lineCost
 } from "@/lib/queries";
 import { getSession, canEditSubsystem } from "@/lib/auth";
-import { ownershipPercent, procurementPriority } from "@/lib/scoring";
+import { ownershipPercent, procurementPriority, priorityBand } from "@/lib/scoring";
 import { StatusBadge, ImportanceBadge } from "@/components/StatusBadge";
 import { ProgressBar } from "@/components/ProgressBar";
 import { PartEditPanel } from "@/components/PartEditPanel";
@@ -44,9 +45,14 @@ export default async function PartDetailPage({ params }: { params: { id: string 
     quantity_owned: part.quantity_owned,
     dependents_count: dependents.length
   });
+  const band = priorityBand(priority);
 
-  const totalCost =
-    (part.actual_cost ?? part.estimated_cost ?? 0) + (part.shipping_cost ?? 0);
+  // Line total, not unit price: quantity matters on a part the team needs 25 of.
+  const totalCost = lineCost(part);
+  const totalCostLow = lineCost(part, "low");
+  const totalCostHigh = lineCost(part, "high");
+  const hasCostRange =
+    part.actual_cost == null && totalCostHigh > totalCostLow;
 
   return (
     <div className="p-6 md:p-8 max-w-[1200px] mx-auto space-y-8">
@@ -92,8 +98,21 @@ export default async function PartDetailPage({ params }: { params: { id: string 
         </div>
         <div className="panel p-5">
           <div className="data-label">SHOPPING LIST PRIORITY</div>
-          <div className={`stat-figure mt-1 text-2xl ${priority >= 70 ? "text-telemetry-red" : priority >= 40 ? "text-telemetry-amber" : "text-graphite-100"}`}>
-            {priority}
+          <div
+            className={`stat-figure mt-1 text-2xl ${
+              band === "URGENT"
+                ? "text-telemetry-red"
+                : band === "HIGH"
+                ? "text-telemetry-amber"
+                : "text-graphite-100"
+            }`}
+          >
+            {band === "NONE" ? "—" : band}
+          </div>
+          <div className="text-xs font-mono text-graphite-500 mt-2">
+            Score {priority} · importance {part.importance.toLowerCase()}
+            {part.lead_time_days != null ? ` · ${part.lead_time_days}d lead` : " · no lead time set"}
+            {dependents.length > 0 ? ` · blocks ${dependents.length}` : ""}
           </div>
         </div>
       </div>

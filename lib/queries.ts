@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { procurementPriority, isNeeded, isOwned } from "./scoring";
+import { procurementPriority, normalizePriorities, priorityBand, isNeeded, isOwned } from "./scoring";
 
 export interface Part {
   id: string;
@@ -326,14 +326,27 @@ export function getGlobalStats() {
     (p) => p.importance === "CRITICAL" && !isOwned(p.status)
   ).length;
 
-  const totalCost = parts.reduce((sum, p) => sum + (p.actual_cost ?? p.estimated_cost ?? 0), 0);
+  // Cost fields are PER UNIT. A line costs unit price x quantity required, so
+  // the rollup has to multiply. Summing the unit price as if it were the line
+  // total under-reports the program by whatever the average quantity is above 1
+  // (measured at 38% low against the real parts workbook).
+  const totalCost = parts.reduce((sum, p) => sum + lineCost(p), 0);
+  const totalCostLow = parts.reduce((sum, p) => sum + lineCost(p, "low"), 0);
+  const totalCostHigh = parts.reduce((sum, p) => sum + lineCost(p, "high"), 0);
 
-  // readiness: weighted blend of ownership completion + critical parts secured
+  // Readiness: weighted blend of ownership completion and critical parts secured.
+  //
+  // When nothing is marked CRITICAL the critical term has no denominator. It
+  // used to default to 1, which handed out the full 45 points for free — a car
+  // with zero parts owned reported 45% readiness. Nothing secured is 0%, so the
+  // honest move is to drop the term and let ownership carry the whole score.
   const ownershipPct = total > 0 ? owned / total : 0;
   const criticalTotal = parts.filter((p) => p.importance === "CRITICAL").length;
   const criticalOwned = parts.filter((p) => p.importance === "CRITICAL" && isOwned(p.status)).length;
-  const criticalPct = criticalTotal > 0 ? criticalOwned / criticalTotal : 1;
-  const readiness = Math.round((ownershipPct * 0.55 + criticalPct * 0.45) * 100);
+  const readiness =
+    criticalTotal > 0
+      ? Math.round((ownershipPct * 0.55 + (criticalOwned / criticalTotal) * 0.45) * 100)
+      : Math.round(ownershipPct * 100);
 
   return {
     total,
@@ -344,8 +357,38 @@ export function getGlobalStats() {
     manufacturing,
     criticalMissing,
     totalCost,
+    totalCostLow,
+    totalCostHigh,
     readiness
   };
+}
+
+/**
+ * Cost of one part LINE: unit price x quantity required, plus shipping once.
+ * `band` picks which unit price to use — the single working figure, or the low
+ * or high end of the quoted range when the workbook supplied one.
+ */
+export function lineCost(
+  p: {
+    actual_cost?: number | null;
+    estimated_cost?: number | null;
+    estimated_cost_low?: number | null;
+    estimated_cost_high?: number | null;
+    shipping_cost?: number | null;
+    quantity_required?: number | null;
+  },
+  band: "mid" | "low" | "high" = "mid"
+): number {
+  // An actual cost is a fact and overrides any estimate, including the range.
+  let unit = p.actual_cost ?? null;
+  if (unit === null) {
+    if (band === "low") unit = p.estimated_cost_low ?? p.estimated_cost ?? null;
+    else if (band === "high") unit = p.estimated_cost_high ?? p.estimated_cost ?? null;
+    else unit = p.estimated_cost ?? null;
+  }
+  if (unit === null) return 0;
+  const qty = Math.max(1, Math.round(p.quantity_required ?? 1));
+  return unit * qty + (p.shipping_cost ?? 0);
 }
 
 export function getStatusBreakdown() {
@@ -378,21 +421,30 @@ export function getPartsWithPriority(filters?: {
   search?: string;
 }) {
   const parts = getAllParts(filters);
-  return parts
-    .map((p) => ({
+  const scored = parts.map((p) => {
+    const dependents = getDependentsCount(p.id);
+    const raw = procurementPriority({
+      status: p.status,
+      importance: p.importance,
+      priority_score: p.priority_score,
+      lead_time_days: p.lead_time_days,
+      quantity_required: p.quantity_required,
+      quantity_owned: p.quantity_owned,
+      dependents_count: dependents
+    });
+    return { ...p, dependents_count: dependents, procurement_priority_raw: raw, priorityScore: raw };
+  });
+
+  // `procurement_priority` is rescaled across the set actually returned, so the
+  // most urgent part in view reads 100 and the rest sit relative to it. The raw
+  // score is kept alongside for anything that needs an absolute comparison.
+  return normalizePriorities(scored)
+    .map(({ priorityScore, priorityRank, ...p }) => ({
       ...p,
-      dependents_count: getDependentsCount(p.id),
-      procurement_priority: procurementPriority({
-        status: p.status,
-        importance: p.importance,
-        priority_score: p.priority_score,
-        lead_time_days: p.lead_time_days,
-        quantity_required: p.quantity_required,
-        quantity_owned: p.quantity_owned,
-        dependents_count: getDependentsCount(p.id)
-      })
+      procurement_priority: priorityRank,
+      procurement_priority_band: priorityBand(p.procurement_priority_raw)
     }))
-    .sort((a, b) => b.procurement_priority - a.procurement_priority);
+    .sort((a, b) => b.procurement_priority_raw - a.procurement_priority_raw);
 }
 
 export function getCriticalProcurementItems(limit = 10) {
