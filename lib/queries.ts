@@ -41,6 +41,29 @@ export interface Part {
   requested_by_name?: string;
   created_at: string;
   updated_at: string;
+
+  // ---- v2 parts-workbook fields (see lib/schema.sql) ----
+  // Optional rather than `| null` because a database migrated by
+  // scripts/migrate-v2.ts has them while an older one does not, and SELECT *
+  // returns whatever the table actually has. Code reading these must cope with
+  // undefined, not just null.
+  /** Workbook line ID, e.g. 'PWT-001'. Null for parts created in the dashboard. */
+  sheet_ref?: string | null;
+  /** Design maturity — a separate axis from purchase_status. */
+  design_status?: "PLACEHOLDER" | "CANDIDATE" | "QUOTED" | "SELECTED" | "FROZEN";
+  /** Per-unit cost range. estimated_cost stays the single working figure. */
+  estimated_cost_low?: number | null;
+  estimated_cost_high?: number | null;
+  /** FSAE clause(s) as free text. Real citations live in rule_citations. */
+  governing_rule?: string | null;
+  driving_target?: string | null;
+  acceptance_criterion?: string | null;
+  sponsor_ask?: "CASH" | "IN_KIND" | "DISCOUNT" | "BUY" | null;
+  unit_of_measure?: string | null;
+  /** Target mass per unit, in kg, against which weight_kg is checked. */
+  allocated_mass_kg?: number | null;
+  subteam_id?: string | null;
+  subteam_name?: string;
 }
 
 export function getAllSubsystems() {
