@@ -15,6 +15,22 @@
 # nginx on the host in front of this container (see deploy/Caddyfile,
 # deploy/nginx.conf), same as the non-Docker deployment path in DEPLOYMENT.md.
 
+# Pinned deliberately. Without this, Compose derives the project name from the
+# DIRECTORY the file sits in, and prefixes volume names with it — so `wsr-data`
+# becomes `wsr-inventory_wsr-data` here but `repo_wsr-data` on a CI runner that
+# checks out into a differently named folder. The result is a brand new empty
+# volume with no error: the app starts, /api/health used to report ok, and the
+# database is gone. Pinning the name makes the volume `wsr_wsr-data` on every
+# machine regardless of folder name.
+#
+# If you have ALREADY run this stack without a pinned name, your data is in the
+# old volume. Move it before relying on this:
+#   docker volume create wsr_wsr-data
+#   docker run --rm -v wsr-inventory_wsr-data:/from -v wsr_wsr-data:/to alpine \
+#     sh -c "cd /from && cp -a . /to"
+# Check what exists first with `docker volume ls | grep wsr-data`.
+name: wsr
+
 services:
   app:
     build:
