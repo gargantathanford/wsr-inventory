@@ -8,7 +8,9 @@ import {
   getPartDependencies,
   getPartDependents,
   getPartProcedures,
-  lineCost
+  lineCost,
+  getRuleCitations,
+  getActiveRuleset
 } from "@/lib/queries";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { ownershipPercent, procurementPriority, priorityBand } from "@/lib/scoring";
@@ -21,6 +23,7 @@ import { DocumentUploadForm } from "@/components/DocumentUploadForm";
 import { getAllSubsystems } from "@/lib/queries";
 import { DependencyGraph } from "@/components/DependencyGraph";
 import { DependencyEditor, RemoveDependencyButton } from "@/components/DependencyEditor";
+import { RuleCitationPicker } from "@/components/RuleCitationPicker";
 import { getAllParts } from "@/lib/queries";
 
 export default async function PartDetailPage({ params }: { params: { id: string } }) {
@@ -46,6 +49,8 @@ export default async function PartDetailPage({ params }: { params: { id: string 
     dependents_count: dependents.length
   });
   const band = priorityBand(priority);
+  const ruleCitations = getRuleCitations("PART", part.id);
+  const activeRuleset = getActiveRuleset();
 
   // Line total, not unit price: quantity matters on a part the team needs 25 of.
   const totalCost = lineCost(part);
@@ -216,6 +221,28 @@ export default async function PartDetailPage({ params }: { params: { id: string 
           </div>
         </section>
       </div>
+
+      {(ruleCitations.length > 0 || canEdit) && (
+        <section className="panel p-6">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <h2 className="text-sm font-medium text-graphite-200">Governing rules</h2>
+            {activeRuleset && (
+              <span className="font-mono text-[10px] text-graphite-600">{activeRuleset.label}</span>
+            )}
+          </div>
+          <div className="mt-4">
+            <RuleCitationPicker partId={part.id} citations={ruleCitations} canEdit={canEdit} />
+          </div>
+          {/* The workbook's free-text rule field, kept visible while leads move
+              their citations onto real clauses. */}
+          {part.governing_rule && (
+            <p className="mt-4 pt-3 border-t border-graphite-800 text-xs text-graphite-500">
+              <span className="font-mono text-[10px] text-graphite-600">FROM SPREADSHEET: </span>
+              {part.governing_rule}
+            </p>
+          )}
+        </section>
+      )}
 
       {(dependencies.length > 0 || dependents.length > 0 || canEdit) && (
         <section className="panel p-6">

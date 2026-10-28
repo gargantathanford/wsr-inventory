@@ -793,3 +793,123 @@ export function getDueReminders(user: { id: string; role: string }, memberSubsys
     }
   }).map((e) => ({ ...e, daysRemaining: daysUntil(e.deadline_date) }));
 }
+
+// ---------------- FSAE RULESET ----------------
+
+export interface RuleRow {
+  id: string;
+  clause_id: string;
+  section: string;
+  parent_clause_id: string | null;
+  depth: number;
+  heading: string;
+  body: string | null;
+}
+
+export function getActiveRuleset() {
+  const db = getDb();
+  return db.prepare(`SELECT * FROM rulesets WHERE is_active = 1 LIMIT 1`).get() as
+    | { id: string; label: string; year: number; version: string | null; clause_count: number }
+    | undefined;
+}
+
+export function getAllRulesets() {
+  const db = getDb();
+  return db.prepare(`SELECT * FROM rulesets ORDER BY year DESC, version DESC`).all() as any[];
+}
+
+/**
+ * Clause search for the citation picker. 1,825 clauses is not a dropdown, so
+ * this is a type-to-search: an exact or prefix clause-ID match ranks first
+ * (somebody typing "T.5.2" wants that clause, not every clause mentioning it),
+ * then heading matches, then body matches.
+ */
+export function searchRules(query: string, limit = 25, rulesetId?: string): RuleRow[] {
+  const db = getDb();
+  const rs = rulesetId ?? getActiveRuleset()?.id;
+  if (!rs) return [];
+
+  const q = query.trim();
+  if (!q) {
+    // No query yet: show the top-level sections so the picker is never empty.
+    return db
+      .prepare(
+        `SELECT id, clause_id, section, parent_clause_id, depth, heading, body
+           FROM rules WHERE ruleset_id = ? AND depth = 1
+           ORDER BY section, clause_id LIMIT ?`
+      )
+      .all(rs, limit) as RuleRow[];
+  }
+
+  const like = `%${q}%`;
+  const prefix = `${q}%`;
+  return db
+    .prepare(
+      `SELECT id, clause_id, section, parent_clause_id, depth, heading, body,
+         CASE
+           WHEN clause_id = ?            THEN 0
+           WHEN clause_id LIKE ?         THEN 1
+           WHEN heading LIKE ?           THEN 2
+           ELSE 3
+         END AS rank
+       FROM rules
+       WHERE ruleset_id = ?
+         AND (clause_id LIKE ? OR heading LIKE ? OR body LIKE ?)
+       ORDER BY rank, LENGTH(clause_id), clause_id
+       LIMIT ?`
+    )
+    .all(q.toUpperCase(), prefix.toUpperCase(), like, rs, prefix.toUpperCase(), like, like, limit) as RuleRow[];
+}
+
+export function getRuleByClauseId(clauseId: string, rulesetId?: string): RuleRow | undefined {
+  const db = getDb();
+  const rs = rulesetId ?? getActiveRuleset()?.id;
+  if (!rs) return undefined;
+  return db
+    .prepare(
+      `SELECT id, clause_id, section, parent_clause_id, depth, heading, body
+         FROM rules WHERE ruleset_id = ? AND clause_id = ?`
+    )
+    .get(rs, clauseId.toUpperCase()) as RuleRow | undefined;
+}
+
+export type CitationEntity = "PART" | "PROCEDURE" | "TASK" | "INTERFACE";
+
+export function getRuleCitations(entityType: CitationEntity, entityId: string) {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT rc.id, rc.note, rc.created_at, r.clause_id, r.heading, r.body, r.section, rs.label AS ruleset_label
+         FROM rule_citations rc
+         JOIN rules r ON r.id = rc.rule_id
+         JOIN rulesets rs ON rs.id = r.ruleset_id
+        WHERE rc.entity_type = ? AND rc.entity_id = ?
+        ORDER BY r.section, r.clause_id`
+    )
+    .all(entityType, entityId) as Array<{
+    id: string;
+    note: string | null;
+    created_at: string;
+    clause_id: string;
+    heading: string;
+    body: string | null;
+    section: string;
+    ruleset_label: string;
+  }>;
+}
+
+/** Parts citing a given clause — "what does T.5.2.7 affect?" */
+export function getPartsCitingClause(clauseId: string) {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT p.id, p.part_name, p.design_status, s.name AS subsystem_name
+         FROM rule_citations rc
+         JOIN rules r ON r.id = rc.rule_id
+         JOIN parts p ON p.id = rc.entity_id
+         JOIN subsystems s ON s.id = p.subsystem_id
+        WHERE rc.entity_type = 'PART' AND r.clause_id = ?
+        ORDER BY s.name, p.part_name`
+    )
+    .all(clauseId.toUpperCase()) as any[];
+}

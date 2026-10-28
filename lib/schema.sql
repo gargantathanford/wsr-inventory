@@ -456,6 +456,52 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ---------------- FSAE RULESET ----------------
+-- A ruleset is never overwritten. SAE renumbers, merges and deletes clauses
+-- between years, so a new edition is imported as a new version and existing
+-- citations are reconciled against it deliberately. Exactly one row should have
+-- is_active = 1; that is the edition new citations are picked from.
+CREATE TABLE IF NOT EXISTS rulesets (
+  id TEXT PRIMARY KEY,
+  label TEXT UNIQUE NOT NULL,              -- 'FSAE Rules 2027 V1.0'
+  year INTEGER NOT NULL,
+  version TEXT,                            -- '1.0'
+  source_filename TEXT,
+  clause_count INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  imported_by TEXT REFERENCES users(id),
+  imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS rules (
+  id TEXT PRIMARY KEY,
+  ruleset_id TEXT NOT NULL REFERENCES rulesets(id) ON DELETE CASCADE,
+  clause_id TEXT NOT NULL,                 -- 'T.5.2.7'
+  section TEXT NOT NULL,                   -- 'T'
+  parent_clause_id TEXT,                   -- 'T.5.2'
+  depth INTEGER NOT NULL,                  -- 3 for T.5.2.7
+  heading TEXT NOT NULL,
+  body TEXT,
+  UNIQUE(ruleset_id, clause_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rules_ruleset ON rules(ruleset_id, section);
+CREATE INDEX IF NOT EXISTS idx_rules_clause ON rules(clause_id);
+
+-- One row per citation. A join table rather than a column because the workbook
+-- already cites several clauses on one line ('F.8.1.1; F.8.1.2; F.8.2.1'), and
+-- because procedures, tasks and interfaces cite rules too.
+CREATE TABLE IF NOT EXISTS rule_citations (
+  id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('PART','PROCEDURE','TASK','INTERFACE')),
+  entity_id TEXT NOT NULL,
+  note TEXT,                               -- why this clause applies here
+  cited_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(rule_id, entity_type, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rule_citations_entity ON rule_citations(entity_type, entity_id);
+
 -- Vehicle-level targets and assumptions, mirroring the 'Vehicle Targets' tab.
 -- Key/value rather than columns because the Chief Engineer adds targets over
 -- time and a schema change per target is not worth it.
