@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS parts (
   -- Target mass per unit assigned by the subsystem lead, against which the real
   -- measured weight_kg is checked. Both per unit, both kilograms.
   allocated_mass_kg REAL,
+  -- Optional finer grouping within the subsystem — Engine, Intake, Fuel System,
+  -- Cooling and Exhaust are subteams of Powertrain, not subsystems of their own.
+  -- Without this column, folding them into Powertrain would lose which area a
+  -- part belongs to.
+  subteam_id TEXT REFERENCES subteams(id) ON DELETE SET NULL,
 
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
