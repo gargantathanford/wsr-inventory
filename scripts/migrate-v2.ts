@@ -172,6 +172,7 @@ function main() {
   const db = new Database(DB_PATH);
   db.pragma("foreign_keys = ON");
 
+  const hasCodeColumn = columnExists(db, "subsystems", "code");
   const pending = STEPS.filter((s) => !s.applied(db));
   const already = STEPS.length - pending.length;
 
@@ -184,12 +185,21 @@ function main() {
   }
 
   // Which subsystems would gain a code, and which workbook tabs still have no home.
-  const subs = db.prepare(`SELECT id, name FROM subsystems`).all() as Array<{ id: string; name: string }>;
+  const subs = db.prepare(
+    hasCodeColumn ? `SELECT id, name, code FROM subsystems` : `SELECT id, name, NULL AS code FROM subsystems`
+  ).all() as Array<{ id: string; name: string; code: string | null }>;
   const matched = subs.filter((s) => CODE_BY_NAME[s.name.trim().toLowerCase()]);
+  // Only rows whose code is still NULL will actually be written. Reporting the
+  // name-match count instead made a finished migration look like it had work
+  // pending.
+  const needsBackfill = matched.filter((s) => !s.code);
   const codesPresent = new Set(matched.map((s) => CODE_BY_NAME[s.name.trim().toLowerCase()]));
   const codesMissing = [...new Set(Object.values(CODE_BY_NAME))].filter((c) => !codesPresent.has(c)).sort();
 
-  console.log(`\nsubsystem codes to backfill : ${matched.length} of ${subs.length} rows`);
+  console.log(
+    `\nsubsystem codes : ${needsBackfill.length} to backfill, ` +
+      `${matched.length - needsBackfill.length} already set, of ${subs.length} subsystems`
+  );
   if (codesMissing.length) {
     console.log(`workbook tabs with NO subsystem in this database: ${codesMissing.join(", ")}`);
     console.log(`  -> create these subsystems before importing those tabs.`);
