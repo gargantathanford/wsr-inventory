@@ -33,6 +33,13 @@ function createConnection(): Database.Database {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
+  // WAL defaults to synchronous=NORMAL, which survives a process crash or
+  // `docker kill` but can lose the last few committed transactions if the HOST
+  // loses power or the VM is force-stopped. FULL fsyncs on every commit and
+  // closes that window. It costs write throughput, which does not matter here:
+  // a few dozen people editing parts is nowhere near a write-bound workload,
+  // and losing the last person's entry is worse than a slower commit.
+  db.pragma("synchronous = FULL");
   db.pragma("foreign_keys = ON");
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   db.exec(schema);

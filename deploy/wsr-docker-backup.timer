@@ -1,0 +1,18 @@
+[Unit]
+Description=Nightly backup timer for Warp Speed Racing Inventory (Docker)
+
+[Timer]
+# 03:15 server time. Check the VM's timezone with `timedatectl` — a backup
+# scheduled in UTC on a machine everyone assumes is local runs at a surprising
+# hour, which matters when you are reading timestamps during an incident.
+OnCalendar=*-*-* 03:15:00
+
+# If the VM was asleep or down at 03:15, run as soon as it is back rather than
+# skipping the night entirely.
+Persistent=true
+
+# Spread the start so a backup never collides with anything else on the hour.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

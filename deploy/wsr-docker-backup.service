@@ -1,0 +1,48 @@
+[Unit]
+# Nightly backup for the DOCKER deployment path.
+#
+# deploy/wsr-inventory-backup.service is the equivalent for the bare-metal
+# systemd path (npx tsx directly). Use that one OR this one, not both.
+#
+# Setup on the VM:
+#   1. Edit WorkingDirectory below to wherever the repo lives.
+#   2. Edit User= to the account that owns the repo and can talk to Docker.
+#   sudo cp deploy/wsr-docker-backup.service deploy/wsr-docker-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wsr-docker-backup.timer
+#
+# Verify it is scheduled:
+#   systemctl list-timers | grep wsr-docker-backup
+# Run it once by hand to prove it works before trusting the schedule:
+#   sudo systemctl start wsr-docker-backup.service
+#   journalctl -u wsr-docker-backup.service -n 30
+Description=Warp Speed Racing Inventory — nightly backup (Docker)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+
+# The account that owns the checkout and is in the `docker` group.
+User=wsr
+Group=wsr
+
+# Where docker-compose.yml lives. MUST be set to the real path.
+WorkingDirectory=/opt/wsr-inventory
+
+# SESSION_SECRET and friends. docker compose reads .env from WorkingDirectory
+# on its own, so this line is only needed if the compose file interpolates
+# variables that live elsewhere.
+# EnvironmentFile=/opt/wsr-inventory/.env
+
+# How many backup sets to retain. The script rotates older ones automatically.
+Environment=BACKUP_RETAIN_COUNT=30
+
+# `backup` sits behind the `tools` profile so it never starts with a bare
+# `docker compose up`. --rm removes the one-shot container afterwards.
+ExecStart=/usr/bin/docker compose --profile tools run --rm backup
+
+# A failed backup should be loud in the journal, not silent.
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=900
