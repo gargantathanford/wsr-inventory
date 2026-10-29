@@ -1,0 +1,286 @@
+# Runbook — start it up and check it works
+
+Every command here runs from the repo root, the folder holding
+`docker-compose.yml`.
+
+## The one rule about `docker compose run`
+
+Two forms exist and they are **not** interchangeable:
+
+```bash
+# CORRECT — the command passes through docker-entrypoint.sh, which fixes
+# volume ownership and then drops to uid 1001 before running it.
+docker compose run --rm maint npx tsx scripts/migrate-v2.ts
+
+# WRONG for anything that writes — --entrypoint replaces the entrypoint, so
+# this runs as root and leaves root-owned wsr.db-wal files in the volume. The
+# app runs as uid 1001 and then cannot write: "attempt to write a readonly
+# database". Recovering means deleting those files and starting over.
+docker compose run --rm --entrypoint sh maint -c "npx tsx scripts/migrate-v2.ts"
+```
+
+`--entrypoint sh` is only safe for read-only inspection. Prefer the first form
+always; it works for reads too.
+
+---
+
+## 1. Get the current code
+
+```bash
+git checkout feat/v2-manual-entry
+git pull
+git log --oneline -1
+```
+
+## 2. Check which volume you are about to use
+
+The compose project name is pinned to `wsr`, so the volume is `wsr_wsr-data`.
+
+```bash
+docker volume ls | grep wsr
+docker run --rm -v wsr_wsr-data:/v alpine ls -la /v
+```
+
+**Expect** `wsr.db` with a non-trivial size. If the volume is empty but
+`wsr-inventory_wsr-data` has a `wsr.db`, your data is in the pre-rename volume:
+
+```bash
+docker compose down
+docker run --rm -v wsr-inventory_wsr-data:/from -v wsr_wsr-data:/to alpine \
+  sh -c "cp -a /from/wsr.db /from/wsr.db-wal /to/ && ls -la /to"
+```
+
+Copy `wsr.db-wal` too — it holds committed transactions not yet folded into the
+main file. Skip `-shm`; SQLite rebuilds it and a stale one confuses recovery.
+
+## 3. Back up before changing anything
+
+```bash
+docker compose run --rm backup
+ls -la backups/
+```
+
+**Expect** a `wsr-<timestamp>.db` and an `uploads-<timestamp>.tar.gz` in
+`./backups/` on the host. The backup service has the right entrypoint already,
+so no override is needed. If it prints "Refusing to run as root", something
+overrode the entrypoint.
+
+This step is not optional. Steps 4 and 5 change the schema.
+
+## 4. Schema migration
+
+Dry run first. It writes nothing.
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-v2.ts
+```
+
+**Expect** `18 total, 0 already applied, 18 pending` on a database that has not
+been migrated, and a list of the columns and tables it will add. If it says
+`18 already applied, 0 pending`, it is already done — skip to step 5.
+
+Then apply:
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-v2.ts --commit
+```
+
+**Expect** `schema steps applied : 18`, `subsystem codes backfilled : 10`,
+`vehicle targets seeded : 10`. It will also warn that no subsystem exists for
+workbook tab `WHE` — step 5 fixes that.
+
+## 5. Taxonomy migration
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-taxonomy.ts
+```
+
+**Expect** a plan: Electronics merging into Electrical, Wheels & Tires being
+created, and Engine / Intake / Fuel System / Cooling / Exhaust becoming subteams
+of Powertrain, with a row count for each. Read the row counts — they tell you
+how much real data is about to move.
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-taxonomy.ts --commit
+```
+
+**Expect** `workbook tab coverage: 11/11 — complete` and a final list of 15
+subsystems. Nothing is deleted until its rows have been repointed; the script
+refuses to remove a subsystem anything still references.
+
+## 6. Reference data — FSAE deadlines and the how-to procedure
+
+```bash
+docker compose run --rm maint npx tsx scripts/seed-reference-data.ts
+```
+
+**Check the ten dates against the current SAE calendar before committing.** They
+were transcribed from the parts workbook and SAE moves dates.
+
+```bash
+docker compose run --rm maint npx tsx scripts/seed-reference-data.ts --commit
+```
+
+**Expect** `calendar events added : 10` and `procedure added : yes, 14 steps`.
+
+## 7. The FSAE ruleset
+
+Convert the PDF to text on the host first. The importer takes text, not PDF, so
+no PDF parser runs inside the app.
+
+```bash
+# brew install poppler   # if pdftotext is missing
+pdftotext -layout FSAE_Rules_2027_V1.pdf rules-2027.txt
+wc -l rules-2027.txt
+```
+
+**Expect** a few thousand lines. Then import:
+
+```bash
+docker compose run --rm -v "$PWD/rules-2027.txt:/app/rules-2027.txt:ro" maint \
+  npx tsx scripts/import-ruleset.ts rules-2027.txt --year 2027 --version 1.0 --commit --activate
+```
+
+**Expect** `imported 1825 clauses`, twelve sections listed, and a reconciliation
+report. If it reports fewer than 200 clauses it refuses — the text extraction
+failed and `-layout` was probably missing.
+
+## 8. Start it
+
+```bash
+docker compose up -d --build app
+docker compose ps
+curl -i localhost:3000/api/health
+```
+
+**Expect** `running (healthy)` and a health body with counts:
+
+```json
+{"status":"ok","db":"ok","users":2,"subsystems":15,"parts":0,...}
+```
+
+- `"subsystems":15` confirms the taxonomy migration took.
+- `"db":"empty"` with HTTP 503 means the app is on a volume with no users —
+  back to step 2.
+- No counts at all means an old image is still running; rebuild.
+
+## 9. Log in
+
+```bash
+docker compose run --rm maint npx tsx scripts/reset-password.ts --list
+```
+
+Pick the admin account, then:
+
+```bash
+docker compose run --rm maint npx tsx scripts/reset-password.ts --email <that address>
+```
+
+The password prints once. Copy it before the terminal scrolls.
+
+Open `http://localhost:3000`, log in, then go to **Settings → Users** and fix
+that account's name and email if they are still placeholders.
+
+---
+
+## 10. Checks, in order
+
+Each one has a specific pass condition. "The page loads" is not one.
+
+**Subsystems** (`/subsystems`) — exactly **15**. `Wheels & Tires` present.
+`Electronics` gone. No `Engine`, `Intake`, `Fuel System`, `Cooling` or `Exhaust`
+at the top level.
+
+**New part** (`/parts/new`) — the most-changed screen:
+
+- Sections collapse and expand: Design maturity, Cost, Mass, Buying it, Status.
+- Help text under every field.
+- Choose Powertrain → a Subteam dropdown appears offering the five demoted areas.
+- **The gate:** set Design status to `Selected` and leave Acceptance criterion
+  empty. The submit button must go disabled with the reason shown inline. Add a
+  sentence and a rule, and it enables.
+- **Line cost:** quantity `25`, cost low `7`, cost high `10` → reads
+  `line total: $175 – $250`. If it shows `$7 – $10`, the per-unit fix is missing.
+
+**Part detail** (`/parts/<id>`) — create that part, open it. A "Governing rules"
+panel appears. Type `scatter shield`. **Expect** `T.5.2.7 Chain Drive — Scatter
+shields for chains must:` among the results. Click to attach, click the heading
+to read the clause text. An empty list means step 7 did not run.
+
+**Shopping list** (`/shopping-list`) — priority shows a band word
+(NORMAL / HIGH / URGENT) under the number; cost shows the line total with the
+range beneath it.
+
+**Dashboard** (`/dashboard`) — readiness reads `0%` when nothing is owned, not
+45%.
+
+**Calendar** (`/calendar`) — the ten FSAE 2027 deadlines, the grounds-for-removal
+ones marked critical.
+
+**Procedures** (`/procedures`) — "How to add a part", 14 steps.
+
+---
+
+## 11. Persistence check
+
+Create a part named `PERSISTENCE TEST`, then escalate. Each step destroys more
+than the last. **Note there is no `-v` anywhere** — that flag deletes the volume.
+
+```bash
+docker compose restart app                 # process restart
+docker compose down && docker compose up -d app   # container destroyed and recreated
+docker compose up -d --build app           # image rebuilt from scratch
+docker kill $(docker compose ps -q app) && docker compose up -d app   # ungraceful kill
+```
+
+Reload the browser after each. The part survives all four, or something is
+wrong.
+
+## 12. Schedule backups on the VM
+
+Only needed on the real server, not for local testing.
+
+```bash
+# edit WorkingDirectory and User= in the .service file first
+sudo cp deploy/wsr-docker-backup.service deploy/wsr-docker-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now wsr-docker-backup.timer
+systemctl list-timers | grep wsr-docker-backup
+
+# prove it works rather than trusting the schedule
+sudo systemctl start wsr-docker-backup.service
+journalctl -u wsr-docker-backup.service -n 30
+```
+
+Then get `./backups/` off the machine — rsync to another host or sync to
+whatever storage the sponsor provides. A backup on the same disk dies with the
+disk.
+
+---
+
+## If something breaks
+
+```bash
+docker compose logs app --tail 50
+docker compose ps
+```
+
+**"attempt to write a readonly database"** — something wrote to the volume as
+root. Check for root-owned files and fix ownership:
+
+```bash
+docker run --rm -v wsr_wsr-data:/v alpine ls -la /v        # look for 0:0
+docker compose run --rm maint sh -c "ls -la /app/data"     # entrypoint fixes it
+```
+
+**Restoring a backup:**
+
+```bash
+docker compose run --rm restore --list
+docker compose stop app
+docker compose run --rm restore <timestamp>
+docker compose up -d app
+```
+
+Restore saves the current database to `backups/pre-restore-<timestamp>.db`
+first, so a mistaken restore is itself recoverable.
