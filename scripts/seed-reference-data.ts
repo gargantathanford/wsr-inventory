@@ -1,9 +1,8 @@
 /**
  * Reference data — facts that do not depend on the team's own plans.
  *
- *   - The FSAE 2027 pre-competition submission deadlines. These are SAE's
- *     dates, not WSR's, so importing them cannot go stale the way a parts
- *     estimate can.
+ *   - The FSAE 2027 pre-competition submission deadlines — BUT ONLY ONCE
+ *     SOMEBODY HAS CONFIRMED THEM. See the warning below.
  *   - A "How to add a part" procedure, so the dashboard explains itself to the
  *     team rather than relying on somebody being shown once.
  *
@@ -14,11 +13,28 @@
  * Safe to run repeatedly: every row is matched before it is inserted and
  * nothing already present is modified.
  *
- * Deadline dates and times are Eastern, as published. Grounds-for-removal
- * submissions get CRITICAL priority and reminders at 30/14/7/3/1/0 days; the
- * rest get HIGH and 14/7/1. VERIFY THESE AGAINST THE CURRENT SAE CALENDAR
- * BEFORE RELYING ON THEM — they were transcribed from the parts workbook, and
- * SAE moves dates.
+ * ---------------------------------------------------------------------------
+ * THE DATES BELOW ARE UNVERIFIED. READ THIS BEFORE USING --commit.
+ *
+ * The FSAE 2027 ruleset contains NO submission dates. Table PS-1 lists each
+ * submission with its rule reference, required format and penalty group, and
+ * nothing else; the only date in the whole document is its own publication
+ * date. PS.3.1 refers to a "Due Date" and a "Cancellation Date" without ever
+ * stating them — those live on the FSAE Event Website.
+ *
+ * The dates in this file were transcribed from a planning spreadsheet whose own
+ * README describes its contents as estimates. They could be wrong by days or
+ * entirely invented.
+ *
+ * A wrong date here is worse than no date. These events render as CRITICAL with
+ * "GROUNDS FOR REMOVAL if missed", which is maximum authority — a team that
+ * trusts a fabricated SES deadline can lose its entry.
+ *
+ * So committing them requires --dates-verified, which you pass only after
+ * checking every date against fsaeonline.com or the Event Website for your
+ * competition. Each seeded event still carries a note saying where its date
+ * came from, so anyone reading the calendar can tell.
+ * ---------------------------------------------------------------------------
  */
 import path from "path";
 import fs from "fs";
@@ -78,6 +94,8 @@ const ADD_PART_STEPS: string[] = [
 
 function main() {
   const commit = process.argv.includes("--commit");
+  const datesVerified = process.argv.includes("--dates-verified");
+  const skipDeadlines = process.argv.includes("--skip-deadlines");
   if (!fs.existsSync(DB_PATH)) {
     console.error(`No database at ${DB_PATH}.`);
     process.exit(1);
@@ -107,11 +125,31 @@ function main() {
   }
   console.log(`\nprocedure "${procTitle}" : ${existingProc ? "already present, leaving it alone" : `to add, ${ADD_PART_STEPS.length} steps`}`);
 
+  console.log(
+    `\nThe dates above are UNVERIFIED. The 2027 ruleset contains no submission dates at all —\n` +
+      `Table PS-1 lists formats and penalty groups only, and PS.3.1 points at the Event Website.\n` +
+      `These were transcribed from a planning spreadsheet and may be wrong or invented.`
+  );
+
   if (!commit) {
-    console.log(`\nDry run complete. Re-run with --commit to write.`);
-    console.log(`Check the deadline dates against the current SAE calendar first — SAE moves them.`);
+    console.log(`\nDry run complete.`);
+    console.log(`To write: check every date against fsaeonline.com, then re-run with`);
+    console.log(`  --commit --dates-verified`);
     db.close();
     return;
+  }
+
+  // Only gate when deadlines are actually about to be written.
+  if (pendingEvents.length > 0 && !datesVerified && !skipDeadlines) {
+    console.error(
+      `\nRefusing to write ${pendingEvents.length} deadline(s) without --dates-verified.\n` +
+        `These render as CRITICAL with "GROUNDS FOR REMOVAL if missed". A fabricated deadline\n` +
+        `presented that way can cost the team its entry, so confirm each date first.\n\n` +
+        `To seed ONLY the procedure and skip the deadlines entirely:\n` +
+        `  --commit --skip-deadlines`
+    );
+    db.close();
+    process.exit(1);
   }
 
   const insEvent = db.prepare(
@@ -123,7 +161,7 @@ function main() {
 
   let events = 0;
   db.transaction(() => {
-    for (const d of pendingEvents) {
+    for (const d of skipDeadlines ? [] : pendingEvents) {
       insEvent.run({
         id: `cal_${nanoid(12)}`,
         title: d.title,
@@ -131,7 +169,8 @@ function main() {
           "Formula SAE 2027 pre-competition submission.",
           d.gfr ? "GROUNDS FOR REMOVAL if missed." : "Late submission accrues penalty points.",
           d.note ?? null,
-          "Times are Eastern. Confirm against the current SAE calendar."
+          "Date transcribed from a team planning spreadsheet and confirmed by whoever ran the " +
+            "seed — the ruleset itself publishes no dates. Re-check on the Event Website."
         ]
           .filter(Boolean)
           .join(" "),
