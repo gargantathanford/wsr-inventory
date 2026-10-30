@@ -51,7 +51,9 @@ export type GateState =
   | "OPEN"
   /** The data satisfies it. Waiting for a lead to put their name to it. */
   | "READY"
-  /** Signed off. */
+  /** A lead has endorsed it. Waiting on the Chief Engineer or an Admin. */
+  | "ENDORSED"
+  /** Approved. This is the only state that counts toward the percentage. */
   | "PASSED";
 
 /** Facts about one subsystem, read from the database by the caller. */
@@ -107,7 +109,13 @@ export interface GateDef {
   means: string;
   /** Gates that must PASS first. */
   after: GateId[];
-  /** Relative weight in the subsystem rollup. */
+  /**
+   * Relative weight in the subsystem rollup. Flat at 1 for every gate, by
+   * decision: a weighted version invites an argument about whether testing is
+   * worth 1.5x freezing a design, and nobody can audit the answer. Flat means
+   * "five of seven gates closed" and "71%" say the same thing, and the field
+   * stays here so a future season can weight them without a schema change.
+   */
   weight: number;
   /** Evidence (a file, a photo, a measurement) required to sign off. */
   requiresEvidence: boolean;
@@ -142,7 +150,7 @@ export const GATES: GateDef[] = [
       "Every part has a chosen design that will not change without a change request. " +
       "Freezing is what makes ordering and manufacturing safe.",
     after: ["SCOPED"],
-    weight: 2,
+    weight: 1,
     requiresEvidence: false,
     derive: (f) => {
       const parts = live(f);
@@ -157,7 +165,7 @@ export const GATES: GateDef[] = [
       "Every part that a rule governs cites the clause it answers to, and the compliance argument " +
       "is written down. This is what Tech Inspection and the design judges ask for.",
     after: ["SCOPED"],
-    weight: 2,
+    weight: 1,
     requiresEvidence: true,
     derive: (f) => {
       const parts = live(f);
@@ -175,7 +183,7 @@ export const GATES: GateDef[] = [
     label: "Procured",
     means: "Everything that is bought has arrived and is in the shop.",
     after: ["DESIGN_FROZEN"],
-    weight: 2,
+    weight: 1,
     requiresEvidence: false,
     derive: (f) => {
       const bought = live(f).filter((p) => !p.isManufactured);
@@ -188,7 +196,7 @@ export const GATES: GateDef[] = [
     label: "Manufactured",
     means: "Everything the team makes itself is made, inspected and ready to fit.",
     after: ["DESIGN_FROZEN"],
-    weight: 2,
+    weight: 1,
     requiresEvidence: true,
     derive: (f) => {
       const made = live(f).filter((p) => p.isManufactured);
@@ -201,7 +209,7 @@ export const GATES: GateDef[] = [
     label: "Installed",
     means: "Fitted to the car, with fasteners torqued and the installation checked.",
     after: ["PROCURED", "MANUFACTURED"],
-    weight: 2,
+    weight: 1,
     requiresEvidence: true,
     derive: (f) => {
       const fitted = live(f).filter((p) => p.isFitted);
@@ -216,7 +224,7 @@ export const GATES: GateDef[] = [
       "Proven to work on the car — not assumed to work because it is installed. " +
       "Needs a record of what was tested and what the result was.",
     after: ["INSTALLED"],
-    weight: 3,
+    weight: 1,
     requiresEvidence: true,
     // No part status can tell you something was tested, so this gate is only
     // ever closed by a person. But "installed and untested" is a real,
@@ -233,14 +241,25 @@ export const GATE_BY_ID: Record<GateId, GateDef> = Object.fromEntries(
   GATES.map((g) => [g.id, g])
 ) as Record<GateId, GateDef>;
 
-/** A lead's recorded decision on one gate. */
+/**
+ * The recorded decision on one gate, in two stages.
+ *
+ * A subsystem lead endorses; the Chief Engineer or an Admin approves. Only
+ * approval closes a gate. The lead who does the work is the right person to
+ * say "this is done" and the wrong person to be the only one who says so —
+ * the endorsement is a real signature with a name on it, not a request.
+ */
 export interface GateSignOff {
   gate: GateId;
   /** PASSED, or NOT_APPLICABLE with a reason. */
   decision: "PASSED" | "NOT_APPLICABLE";
   reason: string | null;
-  by: string;
-  at: string;
+  /** The lead who put the gate forward. Null when a Chief went straight to it. */
+  endorsedBy: string | null;
+  endorsedAt: string | null;
+  /** Chief Engineer or Admin. Until this is set the gate is not closed. */
+  approvedBy: string | null;
+  approvedAt: string | null;
 }
 
 export interface GateStatus {
@@ -251,8 +270,12 @@ export interface GateStatus {
   weight: number;
   /** Why it is in this state, in words, for the UI. */
   detail: string;
-  signedOffBy: string | null;
-  signedOffAt: string | null;
+  /** The lead who put it forward, if anyone has. */
+  endorsedBy: string | null;
+  endorsedAt: string | null;
+  /** The Chief Engineer or Admin who approved it. Null until closed. */
+  approvedBy: string | null;
+  approvedAt: string | null;
   requiresEvidence: boolean;
   /**
    * Signed off, but the data has since stopped supporting it — a part was
@@ -291,34 +314,52 @@ export function evaluateGates(facts: SubsystemFacts, signOffs: GateSignOff[]): G
         ...base(def),
         state: "NOT_APPLICABLE",
         detail: signed.reason ? `Out of scope: ${signed.reason}` : "Marked out of scope",
-        signedOffBy: signed.by,
-        signedOffAt: signed.at
+        endorsedBy: signed.endorsedBy,
+        endorsedAt: signed.endorsedAt,
+        approvedBy: signed.approvedBy,
+        approvedAt: signed.approvedAt
       });
       continue;
     }
 
     if (signed?.decision === "PASSED") {
-      resolved.set(def.id, "PASSED");
-      // Re-derive even for a passed gate: the data may have moved since the
-      // signature. SCOPED is the one that matters most — adding parts after it
-      // passes would otherwise recreate the old denominator bug in a subtler
-      // form, with a signature on top making it look verified.
+      // Re-derive even for a signed gate: the data may have moved since. SCOPED
+      // is the one that matters most — adding parts after it closes would
+      // otherwise recreate the old denominator bug in a subtler form, with a
+      // signature on top making it look verified.
       const nowSays = def.derive(facts);
       const isStale = nowSays === "unsatisfied";
+      const staleReason = isStale
+        ? `Signed off, but the data no longer agrees: ${explainOpen(def, facts)}`
+        : null;
+
+      // Endorsed but not yet approved is NOT closed. It counts for nothing in
+      // the percentage, because the whole point of the two stages is that one
+      // person's word is not the finish line.
+      const state: GateState = signed.approvedBy ? "PASSED" : "ENDORSED";
+      resolved.set(def.id, state);
       out.push({
         ...base(def),
-        state: "PASSED",
-        detail: `Signed off${signed.reason ? ` — ${signed.reason}` : ""}`,
-        signedOffBy: signed.by,
-        signedOffAt: signed.at,
+        state,
+        detail:
+          state === "PASSED"
+            ? `Approved${signed.reason ? ` — ${signed.reason}` : ""}`
+            : "Endorsed by the subsystem lead — waiting on the Chief Engineer",
+        endorsedBy: signed.endorsedBy,
+        endorsedAt: signed.endorsedAt,
+        approvedBy: signed.approvedBy,
+        approvedAt: signed.approvedAt,
         stale: isStale,
-        staleReason: isStale ? `Signed off, but the data no longer agrees: ${explainOpen(def, facts)}` : null
+        staleReason
       });
       continue;
     }
 
     // A NOT_APPLICABLE prerequisite does not block; it is settled, just not by
     // passing. Only a genuinely unfinished prerequisite blocks.
+    // ENDORSED deliberately does NOT clear a prerequisite. A lead endorsing
+    // "design frozen" must not unlock a Procured sign-off before the Chief has
+    // agreed the design is actually frozen.
     const blockers = def.after.filter((p) => {
       const s = resolved.get(p);
       return s !== "PASSED" && s !== "NOT_APPLICABLE";
@@ -329,9 +370,7 @@ export function evaluateGates(facts: SubsystemFacts, signOffs: GateSignOff[]): G
       out.push({
         ...base(def),
         state: "BLOCKED",
-        detail: `Waiting on ${blockers.map((b) => GATE_BY_ID[b].label).join(" and ")}`,
-        signedOffBy: null,
-        signedOffAt: null
+        detail: `Waiting on ${blockers.map((b) => GATE_BY_ID[b].label).join(" and ")}`
       });
       continue;
     }
@@ -342,9 +381,7 @@ export function evaluateGates(facts: SubsystemFacts, signOffs: GateSignOff[]): G
       out.push({
         ...base(def),
         state: "READY",
-        detail: "The data says this is done — needs a lead to sign it off",
-        signedOffBy: null,
-        signedOffAt: null
+        detail: "The data says this is done — needs the subsystem lead to endorse it"
       });
     } else {
       resolved.set(def.id, "OPEN");
@@ -354,9 +391,7 @@ export function evaluateGates(facts: SubsystemFacts, signOffs: GateSignOff[]): G
         detail:
           derived === "nothing-to-judge"
             ? nothingToJudge(def, facts)
-            : explainOpen(def, facts),
-        signedOffBy: null,
-        signedOffAt: null
+            : explainOpen(def, facts)
       });
     }
   }
@@ -371,6 +406,10 @@ function base(def: GateDef) {
     means: def.means,
     weight: def.weight,
     requiresEvidence: def.requiresEvidence,
+    endorsedBy: null as string | null,
+    endorsedAt: null as string | null,
+    approvedBy: null as string | null,
+    approvedAt: null as string | null,
     stale: false,
     staleReason: null as string | null
   };
@@ -485,4 +524,101 @@ export function rollUp(gates: GateStatus[]): Readiness {
 /** Everything in one call, for the common case. */
 export function readinessFor(facts: SubsystemFacts, signOffs: GateSignOff[]): Readiness {
   return rollUp(evaluateGates(facts, signOffs));
+}
+
+/* -------------------------------------------------------------------------
+ * Who may do what
+ *
+ * A subsystem lead endorses; only the Chief Engineer or an Admin approves. And
+ * nobody approves their own endorsement of the Tested gate — "it works" is the
+ * one claim that must pass through two sets of eyes, because it is the claim
+ * most expensive to get wrong and the easiest to assert from enthusiasm.
+ *
+ * Pure predicates returning a REASON rather than a boolean: the API hands the
+ * reason straight to the person, so a refusal says why instead of 403.
+ * ---------------------------------------------------------------------- */
+
+export type Role = "ADMIN" | "CHIEF_ENGINEER" | "TEAM_LEADER" | "TEAM_MEMBER";
+
+export interface Actor {
+  id: string;
+  role: Role;
+  /** True when this person leads the subsystem the gate belongs to. */
+  leadsThisSubsystem: boolean;
+}
+
+/** Chief Engineer and Admin are the only approving roles. */
+export function isApprover(role: Role): boolean {
+  return role === "ADMIN" || role === "CHIEF_ENGINEER";
+}
+
+/**
+ * Can this person put the gate forward? Null means yes.
+ */
+export function endorseProblem(actor: Actor, gate: GateStatus): string | null {
+  if (actor.role === "TEAM_MEMBER") {
+    return "Only the subsystem lead can endorse a gate. Ask your lead to put it forward.";
+  }
+  if (actor.role === "TEAM_LEADER" && !actor.leadsThisSubsystem) {
+    return "You lead a different subsystem. Only this subsystem's lead or the Chief Engineer can endorse this gate.";
+  }
+  if (gate.state === "BLOCKED") {
+    return `${gate.label} cannot be endorsed yet — ${gate.detail.toLowerCase()}.`;
+  }
+  if (gate.state === "PASSED") return `${gate.label} has already been approved.`;
+  if (gate.state === "ENDORSED") return `${gate.label} is already endorsed and waiting on the Chief Engineer.`;
+  if (gate.state === "NOT_APPLICABLE") return `${gate.label} is marked out of scope. Put it back in scope first.`;
+  return null;
+}
+
+/**
+ * Can this person close the gate? Null means yes.
+ *
+ * `endorsedBy` is passed separately rather than read off the gate, so the check
+ * works on the row being written as well as on one already stored.
+ */
+export function approveProblem(
+  actor: Actor,
+  gate: GateStatus,
+  endorsedBy: string | null
+): string | null {
+  if (!isApprover(actor.role)) {
+    return "Only the Chief Engineer or an Admin can approve a gate. Endorse it instead and it will go to them.";
+  }
+  if (gate.state === "PASSED") return `${gate.label} has already been approved.`;
+  if (gate.state === "BLOCKED") {
+    return `${gate.label} cannot be approved yet — ${gate.detail.toLowerCase()}.`;
+  }
+  if (!endorsedBy) {
+    return `${gate.label} has not been endorsed by the subsystem lead yet. It should come up through them.`;
+  }
+  // The one hard separation. Everything else a Chief can do end to end.
+  if (gate.gate === "TESTED" && endorsedBy === actor.id) {
+    return (
+      "You endorsed this Tested gate, so somebody else has to approve it. " +
+      "A test signed off by one person is an opinion."
+    );
+  }
+  if (gate.requiresEvidence && gate.state !== "ENDORSED") {
+    return `${gate.label} needs evidence attached before it can be approved.`;
+  }
+  return null;
+}
+
+/**
+ * Marking a gate out of scope. Needs a reason, and the reason is published on
+ * the subsystem page — an unexplained N/A is indistinguishable from hiding
+ * work, and the whole model rests on the denominator being honest.
+ */
+export function notApplicableProblem(actor: Actor, gate: GateStatus, reason: string): string | null {
+  if (!isApprover(actor.role)) {
+    return "Only the Chief Engineer or an Admin can mark a gate out of scope.";
+  }
+  if (reason.trim().length < 10) {
+    return "Give a reason of at least a few words. It is shown on the subsystem page next to the gate.";
+  }
+  if (gate.gate === "SCOPED") {
+    return "Scoped cannot be marked out of scope — it is the gate that asserts the part list is complete.";
+  }
+  return null;
 }

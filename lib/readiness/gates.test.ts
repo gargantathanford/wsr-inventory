@@ -4,7 +4,11 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateGates, readinessFor, rollUp, GATES, type SubsystemFacts, type GateSignOff, type PartFacts } from "./gates";
+import {
+  evaluateGates, readinessFor, rollUp, GATES,
+  endorseProblem, approveProblem, notApplicableProblem, isApprover,
+  type SubsystemFacts, type GateSignOff, type PartFacts
+} from "./gates";
 
 function part(over: Partial<PartFacts> = {}): PartFacts {
   return {
@@ -22,20 +26,36 @@ function facts(over: Partial<SubsystemFacts> = {}): SubsystemFacts {
   return { partListDeclaredComplete: false, parts: [], testsWithEvidence: 0, ...over };
 }
 
+/** Fully approved: lead endorsed, Chief approved. */
 const signed = (gate: any, reason: string | null = null): GateSignOff => ({
   gate,
   decision: "PASSED",
   reason,
-  by: "u_lead",
-  at: "2026-10-30 12:00:00"
+  endorsedBy: "u_lead",
+  endorsedAt: "2026-10-30 12:00:00",
+  approvedBy: "u_chief",
+  approvedAt: "2026-10-30 13:00:00"
+});
+
+/** Endorsed by the lead only — deliberately NOT closed. */
+const endorsed = (gate: any): GateSignOff => ({
+  gate,
+  decision: "PASSED",
+  reason: null,
+  endorsedBy: "u_lead",
+  endorsedAt: "2026-10-30 12:00:00",
+  approvedBy: null,
+  approvedAt: null
 });
 
 const na = (gate: any, reason: string): GateSignOff => ({
   gate,
   decision: "NOT_APPLICABLE",
   reason,
-  by: "u_lead",
-  at: "2026-10-30 12:00:00"
+  endorsedBy: null,
+  endorsedAt: null,
+  approvedBy: "u_chief",
+  approvedAt: "2026-10-30 12:00:00"
 });
 
 describe("the failure modes of the old part-count metric", () => {
@@ -109,7 +129,7 @@ describe("derivation vs sign-off", () => {
     );
     const d = gs.find((g) => g.gate === "DESIGN_FROZEN")!;
     assert.equal(d.state, "READY");
-    assert.match(d.detail, /needs a lead to sign it off/i);
+    assert.match(d.detail, /needs the subsystem lead to endorse it/i);
   });
 
   test("READY does not count toward the percentage", () => {
@@ -357,5 +377,205 @@ describe("a signed gate notices when the data moves under it", () => {
       [signed("SCOPED"), signed("DESIGN_FROZEN"), signed("PROCURED")]
     );
     assert.equal(r.gates.find((g) => g.gate === "PROCURED")!.stale, false);
+  });
+});
+
+describe("endorsement is not approval", () => {
+  const facts2 = () => facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN" })] });
+
+  test("a lead's endorsement alone does not close a gate", () => {
+    const r = readinessFor(facts2(), [endorsed("SCOPED")]);
+    const g = r.gates.find((x) => x.gate === "SCOPED")!;
+    assert.equal(g.state, "ENDORSED");
+    assert.equal(r.passed, 0, "one person's word is not the finish line");
+    assert.equal(r.pct, 0);
+  });
+
+  test("an endorsed gate does NOT unlock what comes after it", () => {
+    // A lead endorsing "design frozen" must not let Procured be signed before
+    // the Chief has agreed the design is actually frozen.
+    const gs = evaluateGates(facts2(), [signed("SCOPED"), endorsed("DESIGN_FROZEN")]);
+    assert.equal(gs.find((g) => g.gate === "PROCURED")!.state, "BLOCKED");
+  });
+
+  test("approval closes it and it counts", () => {
+    const r = readinessFor(facts2(), [signed("SCOPED")]);
+    assert.equal(r.gates.find((g) => g.gate === "SCOPED")!.state, "PASSED");
+    assert.equal(r.passed, 1);
+  });
+
+  test("the detail names who is being waited on", () => {
+    const gs = evaluateGates(facts2(), [endorsed("SCOPED")]);
+    assert.match(gs.find((g) => g.gate === "SCOPED")!.detail, /waiting on the Chief Engineer/i);
+  });
+});
+
+describe("who may endorse", () => {
+  const ready = () =>
+    evaluateGates(facts({ partListDeclaredComplete: true, parts: [part()] }), []).find((g) => g.gate === "SCOPED")!;
+
+  test("a team member cannot", () => {
+    const p = endorseProblem({ id: "u1", role: "TEAM_MEMBER", leadsThisSubsystem: false }, ready());
+    assert.match(p!, /Only the subsystem lead/);
+  });
+
+  test("a lead of a DIFFERENT subsystem cannot", () => {
+    const p = endorseProblem({ id: "u1", role: "TEAM_LEADER", leadsThisSubsystem: false }, ready());
+    assert.match(p!, /lead a different subsystem/);
+  });
+
+  test("this subsystem's lead can", () => {
+    assert.equal(endorseProblem({ id: "u1", role: "TEAM_LEADER", leadsThisSubsystem: true }, ready()), null);
+  });
+
+  test("the Chief can endorse directly, without leading the subsystem", () => {
+    assert.equal(endorseProblem({ id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, ready()), null);
+  });
+
+  test("a blocked gate cannot be endorsed, and says what it waits on", () => {
+    const blocked = evaluateGates(facts({ parts: [part()] }), []).find((g) => g.gate === "DESIGN_FROZEN")!;
+    const p = endorseProblem({ id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: true }, blocked);
+    assert.match(p!, /cannot be endorsed yet/);
+    assert.match(p!, /waiting on scoped/i);
+  });
+});
+
+describe("who may approve", () => {
+  const endorsedScoped = () =>
+    evaluateGates(facts({ partListDeclaredComplete: true, parts: [part()] }), [endorsed("SCOPED")]).find(
+      (g) => g.gate === "SCOPED"
+    )!;
+
+  test("a team leader cannot approve, and is told to endorse instead", () => {
+    const p = approveProblem({ id: "u_lead", role: "TEAM_LEADER", leadsThisSubsystem: true }, endorsedScoped(), "u_lead");
+    assert.match(p!, /Only the Chief Engineer or an Admin/);
+    assert.match(p!, /Endorse it instead/);
+  });
+
+  test("the Chief can approve a lead's endorsement", () => {
+    assert.equal(
+      approveProblem({ id: "u_chief", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, endorsedScoped(), "u_lead"),
+      null
+    );
+  });
+
+  test("an Admin can approve", () => {
+    assert.equal(
+      approveProblem({ id: "u_admin", role: "ADMIN", leadsThisSubsystem: false }, endorsedScoped(), "u_lead"),
+      null
+    );
+  });
+
+  test("nothing can be approved before a lead has endorsed it", () => {
+    const ready = evaluateGates(facts({ partListDeclaredComplete: true, parts: [part()] }), []).find(
+      (g) => g.gate === "SCOPED"
+    )!;
+    const p = approveProblem({ id: "u_chief", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, ready, null);
+    assert.match(p!, /not been endorsed/);
+  });
+});
+
+describe("nobody approves their own Tested gate", () => {
+  function testedGate(endorser: string) {
+    const f = facts({
+      partListDeclaredComplete: true,
+      parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })],
+      testsWithEvidence: 1
+    });
+    return evaluateGates(f, [
+      signed("SCOPED"), signed("DESIGN_FROZEN"), signed("RULES_CHECKED"),
+      signed("PROCURED"), na("MANUFACTURED", "all bought"), signed("INSTALLED"),
+      { gate: "TESTED", decision: "PASSED", reason: null, endorsedBy: endorser,
+        endorsedAt: "2026-10-30", approvedBy: null, approvedAt: null }
+    ]).find((g) => g.gate === "TESTED")!;
+  }
+
+  test("the Chief cannot approve a Tested gate they endorsed themselves", () => {
+    const p = approveProblem(
+      { id: "u_chief", role: "CHIEF_ENGINEER", leadsThisSubsystem: true },
+      testedGate("u_chief"),
+      "u_chief"
+    );
+    assert.match(p!, /somebody else has to approve it/);
+    assert.match(p!, /signed off by one person is an opinion/);
+  });
+
+  test("but can approve one a lead endorsed", () => {
+    assert.equal(
+      approveProblem({ id: "u_chief", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, testedGate("u_lead"), "u_lead"),
+      null
+    );
+  });
+
+  test("the restriction is specific to Tested — a Chief can do Installed end to end", () => {
+    const f = facts({
+      partListDeclaredComplete: true,
+      parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })]
+    });
+    const installed = evaluateGates(f, [
+      signed("SCOPED"), signed("DESIGN_FROZEN"), signed("PROCURED"), na("MANUFACTURED", "bought"),
+      { gate: "INSTALLED", decision: "PASSED", reason: null, endorsedBy: "u_chief",
+        endorsedAt: "2026-10-30", approvedBy: null, approvedAt: null }
+    ]).find((g) => g.gate === "INSTALLED")!;
+    assert.equal(
+      approveProblem({ id: "u_chief", role: "CHIEF_ENGINEER", leadsThisSubsystem: true }, installed, "u_chief"),
+      null
+    );
+  });
+});
+
+describe("marking a gate out of scope", () => {
+  const openTested = () =>
+    evaluateGates(facts({ parts: [part()] }), []).find((g) => g.gate === "TESTED")!;
+
+  test("a lead cannot do it", () => {
+    const p = notApplicableProblem(
+      { id: "u1", role: "TEAM_LEADER", leadsThisSubsystem: true },
+      openTested(),
+      "no track time this season"
+    );
+    assert.match(p!, /Only the Chief Engineer or an Admin/);
+  });
+
+  test("a reason is required, and 'n/a' is not a reason", () => {
+    const p = notApplicableProblem({ id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, openTested(), "n/a");
+    assert.match(p!, /at least a few words/);
+  });
+
+  test("a real reason is accepted", () => {
+    assert.equal(
+      notApplicableProblem(
+        { id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false },
+        openTested(),
+        "no track time available this season"
+      ),
+      null
+    );
+  });
+
+  test("Scoped can never be marked out of scope", () => {
+    const scoped = evaluateGates(facts({ parts: [part()] }), []).find((g) => g.gate === "SCOPED")!;
+    const p = notApplicableProblem(
+      { id: "u1", role: "ADMIN", leadsThisSubsystem: false },
+      scoped,
+      "we know what we need already"
+    );
+    assert.match(p!, /cannot be marked out of scope/);
+  });
+});
+
+describe("flat weights", () => {
+  test("every gate weighs the same, so gates-closed and percent agree", () => {
+    assert.deepEqual([...new Set(GATES.map((g) => g.weight))], [1]);
+  });
+
+  test("five of seven closed reads 71%", () => {
+    const f = facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })] });
+    const r = readinessFor(f, [
+      signed("SCOPED"), signed("DESIGN_FROZEN"), signed("RULES_CHECKED"), signed("PROCURED"), signed("MANUFACTURED")
+    ]);
+    assert.equal(r.passed, 5);
+    assert.equal(r.applicable, 7);
+    assert.equal(r.pct, 71);
   });
 });
