@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { SessionUser } from "@/lib/auth";
 import { NotificationBell } from "@/components/NotificationBell";
 import { OnlineCounter } from "@/components/OnlineCounter";
+import { XpBadge } from "@/components/xp/XpBadge";
 
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Admin",
@@ -39,6 +40,8 @@ export function TopBar({ user }: { user: SessionUser }) {
       </form>
       <div className="ml-auto flex items-center gap-4">
         <OnlineCounter className="hidden md:flex" />
+        {/* Small and quiet on purpose — XP is never the headline number. */}
+        <XpBadge />
         <NotificationBell />
         <div className="text-right hidden sm:block">
           <div className="text-sm text-graphite-100 leading-tight">{user.name}</div>
