@@ -13,7 +13,8 @@
     "seed:prod": "tsx scripts/seed-production.ts",
     "backup": "tsx scripts/backup.ts",
     "restore": "tsx scripts/restore.ts",
-    "test:xp": "node --import tsx --test lib/xp/*.test.ts"
+    "test:xp": "node --import tsx --test lib/xp/*.test.ts",
+    "test": "node --import tsx --test lib/**/*.test.ts"
   },
   "dependencies": {
     "bcryptjs": "2.4.3",

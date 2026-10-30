@@ -25,10 +25,15 @@ export async function signSession(user: SessionUser): Promise<string> {
     .sign(secretKey);
 }
 
-export async function verifySession(token: string): Promise<SessionUser | null> {
+/** Session plus the JWT's issued-at, used to retire tokens older than a password change. */
+export interface VerifiedSession extends SessionUser {
+  iat?: number;
+}
+
+export async function verifySession(token: string): Promise<VerifiedSession | null> {
   try {
     const { payload } = await jwtVerify(token, secretKey);
-    return payload as unknown as SessionUser;
+    return payload as unknown as VerifiedSession;
   } catch {
     return null;
   }
@@ -42,10 +47,23 @@ export async function getSession(): Promise<SessionUser | null> {
   // Defense in depth: a deactivated account should lose access immediately,
   // not just at next login, even if their JWT hasn't expired yet.
   const db = getDb();
-  const row = db.prepare("SELECT is_active FROM users WHERE id = ?").get(session.id) as
-    | { is_active: number }
+  const row = db.prepare("SELECT is_active, password_changed_at FROM users WHERE id = ?").get(session.id) as
+    | { is_active: number; password_changed_at: string | null }
     | undefined;
   if (!row || row.is_active === 0) return null;
+
+  // Retire sessions issued before the password changed. Without this a stolen
+  // or shared token keeps working for the rest of its 30 days and changing the
+  // password accomplishes nothing — which is the opposite of what anyone
+  // changing a password expects.
+  //
+  // Checked here rather than in middleware because middleware cannot reach the
+  // database. Middleware will still pass an old token through, but every page
+  // and API route calls getSession, so the request is rejected a step later.
+  if (row.password_changed_at && session.iat) {
+    const changedAtSec = Math.floor(new Date(row.password_changed_at + "Z").getTime() / 1000);
+    if (Number.isFinite(changedAtSec) && session.iat < changedAtSec) return null;
+  }
   // Every authenticated request is evidence of activity — this is what
   // powers the live online/away/offline presence indicators.
   db.prepare(`UPDATE users SET last_active = datetime('now') WHERE id = ?`).run(session.id);

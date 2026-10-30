@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, hashPassword } from "@/lib/auth";
+import { checkPassword } from "@/lib/password";
 
 async function requireAdmin() {
   const user = await getSession();
@@ -16,7 +17,7 @@ const UpdateInput = z.object({
   phone_number: z.string().optional().nullable(),
   role: z.enum(["ADMIN", "CHIEF_ENGINEER", "TEAM_LEADER", "TEAM_MEMBER"]).optional(),
   is_active: z.union([z.boolean(), z.literal(0), z.literal(1)]).optional(),
-  password: z.string().min(6).optional(),
+  password: z.string().min(1).optional(),
   team_led: z.string().optional().nullable()
 });
 
@@ -42,7 +43,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (data.phone_number !== undefined) updates.phone_number = data.phone_number || null;
   if (data.role) updates.role = data.role;
   if (data.is_active !== undefined) updates.is_active = data.is_active ? 1 : 0;
-  if (data.password) updates.password_hash = hashPassword(data.password);
+  if (data.password) {
+    // The edit payload carries no email, so the guessability context comes from
+    // the stored record — otherwise an admin could set a password that is just
+    // that person's own email and nothing would catch it.
+    const target = db.prepare(`SELECT name, email FROM users WHERE id = ?`).get(params.id) as
+      | { name: string; email: string }
+      | undefined;
+    if (!target) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const pw = checkPassword(data.password, { name: data.name ?? target.name, email: target.email });
+    if (!pw.ok) return NextResponse.json({ error: pw.problems.join(" ") }, { status: 400 });
+    updates.password_hash = hashPassword(data.password);
+    // Signs that person out everywhere — an admin resetting a password is
+    // often doing it BECAUSE the old one is compromised.
+    updates.password_changed_at = new Date().toISOString().replace("T", " ").slice(0, 19);
+  }
 
   if (Object.keys(updates).length > 0) {
     const setClause = Object.keys(updates)

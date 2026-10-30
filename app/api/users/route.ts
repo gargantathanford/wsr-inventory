@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, hashPassword } from "@/lib/auth";
 import { presenceStatus } from "@/lib/presence";
+import { checkPassword, MIN_PASSWORD_LENGTH } from "@/lib/password";
 
 async function requireAdmin() {
   const user = await getSession();
@@ -42,7 +43,8 @@ const UserInput = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   phone_number: z.string().optional().nullable(),
-  password: z.string().min(6),
+  // Length checked by checkPassword below so the policy lives in one place.
+  password: z.string().min(1),
   role: z.enum(["ADMIN", "CHIEF_ENGINEER", "TEAM_LEADER", "TEAM_MEMBER"]),
   team_led: z.string().optional().nullable()
 });
@@ -54,6 +56,9 @@ export async function POST(req: NextRequest) {
   const parsed = UserInput.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   const data = parsed.data;
+
+  const pw = checkPassword(data.password, { name: data.name, email: data.email });
+  if (!pw.ok) return NextResponse.json({ error: pw.problems.join(" ") }, { status: 400 });
 
   const db = getDb();
   const existing = db.prepare(`SELECT id FROM users WHERE email = ?`).get(data.email.toLowerCase());

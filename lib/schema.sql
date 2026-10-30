@@ -6,10 +6,14 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   phone_number TEXT,
   password_hash TEXT NOT NULL,
+  -- Set whenever the password changes. Any session issued BEFORE this instant
+  -- stops being valid, so changing a password actually signs other devices out
+  -- instead of leaving a 30-day token working.
   role TEXT NOT NULL CHECK (role IN ('ADMIN','CHIEF_ENGINEER','TEAM_LEADER','TEAM_MEMBER')),
   is_active INTEGER NOT NULL DEFAULT 1,
   last_active TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  password_changed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subsystems (

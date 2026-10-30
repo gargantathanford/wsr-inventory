@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { SessionUser } from "@/lib/auth";
@@ -46,12 +47,12 @@ export function TopBar({ user }: { user: SessionUser }) {
         {/* Small and quiet on purpose — XP is never the headline number. */}
         <XpBadge />
         <NotificationBell />
-        <div className="text-right hidden sm:block">
+        <Link href="/account" className="text-right hidden sm:block hover:opacity-80 transition-opacity" title="Your account">
           <div className="text-sm text-graphite-100 leading-tight">{user.name}</div>
           <div className="text-[11px] font-mono text-graphite-500 leading-tight">
             {ROLE_LABEL[user.role]}
           </div>
-        </div>
+        </Link>
         <button onClick={logout} className="btn-ghost text-xs py-1.5">
           Sign out
         </button>

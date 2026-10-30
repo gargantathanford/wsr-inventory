@@ -30,6 +30,7 @@ import crypto from "crypto";
 import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
+import { checkPassword } from "../lib/password";
 
 const DB_PATH = process.env.WSR_DB_PATH || path.join(process.cwd(), "data", "wsr.db");
 
@@ -102,14 +103,21 @@ function main() {
   }
 
   const supplied = arg("password");
-  if (supplied != null && supplied.length < 12) {
-    console.error(`That password is ${supplied.length} characters. Use at least 12.`);
-    db.close();
-    process.exit(1);
+  if (supplied != null) {
+    // Same policy the app enforces — one module, no drift.
+    const check = checkPassword(supplied, { name: user.name, email: user.email });
+    if (!check.ok) {
+      for (const problem of check.problems) console.error(`  ${problem}`);
+      db.close();
+      process.exit(1);
+    }
   }
   const password = supplied ?? generatePassword();
 
-  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(bcrypt.hashSync(password, 10), user.id);
+  db.prepare(`UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?`).run(
+    bcrypt.hashSync(password, 10),
+    user.id
+  );
 
   // Recorded in the append-only log: an out-of-band password change is exactly
   // the kind of event that should leave a trace.
