@@ -266,6 +266,14 @@ range beneath it.
 **Dashboard** (`/dashboard`) — readiness reads `0%` when nothing is owned, not
 45%.
 
+**The car** (`/dashboard`, panel "The car, as it stands") — a top-down schematic
+draws itself in. With no parts entered every region is dim; that is correct, not
+a broken render. Enter a part and own it, reload, and that region turns orange.
+Point at a region: the rest dim and the readout below names the subsystem and
+its counts. Click the name to land on that subsystem. On a phone, tap works the
+same way — the readout is below the drawing rather than a tooltip for exactly
+that reason.
+
 **Calendar** (`/calendar`) — the ten FSAE 2027 deadlines, the grounds-for-removal
 ones marked critical.
 
