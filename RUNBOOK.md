@@ -215,7 +215,21 @@ pdftotext -layout FSAE_Rules_2027_V1.pdf rules-2027.txt
 wc -l rules-2027.txt
 ```
 
-**Expect** a few thousand lines. Then import:
+**Expect** roughly 5850 lines and about 300 KB.
+
+**The text file must exist before the next command.** The import bind-mounts
+`$PWD/rules-2027.txt`, and Docker creates a host path that does not exist as an
+empty **directory** rather than failing. You then get a confusing error, and a
+stray `rules-2027.txt/` directory sitting in the repo that the next download
+refuses to overwrite. If that has already happened:
+
+```bash
+rmdir rules-2027.txt     # refuses if anything is inside
+```
+
+The importer now detects both this and a truncated file, and says which it is.
+
+Then import:
 
 ```bash
 docker compose run --rm -v "$PWD/rules-2027.txt:/app/rules-2027.txt:ro" maint \

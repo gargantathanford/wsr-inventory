@@ -5,3 +5,6 @@ data/*.db-*
 .env
 *.tsbuildinfo
 backups/
+
+# Derived from the ruleset PDF by pdftotext. Regenerate, do not commit.
+rules-*.txt

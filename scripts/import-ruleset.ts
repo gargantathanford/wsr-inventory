@@ -126,6 +126,30 @@ function main() {
     );
     process.exit(1);
   }
+  // A DIRECTORY at this path is almost always Docker's doing: bind-mounting
+  // `$PWD/rules-2027.txt` when the host file does not exist creates an empty
+  // directory there instead of failing, and the next thing you see is an
+  // EISDIR from readFileSync with no hint as to why.
+  if (fs.statSync(file).isDirectory()) {
+    console.error(
+      `${file} is a DIRECTORY, not a file.\n\n` +
+        `Docker created it. Bind-mounting a host path that does not exist yet\n` +
+        `makes an empty directory at that path. Remove it and put the real file\n` +
+        `there before mounting:\n\n` +
+        `  rmdir "${file}"\n` +
+        `  pdftotext -layout FSAE_Rules_2027_V1.pdf ${path.basename(file)}\n`
+    );
+    process.exit(1);
+  }
+  const size = fs.statSync(file).size;
+  if (size < 50_000) {
+    console.error(
+      `${file} is only ${size} bytes — far too small for a 147-page ruleset.\n` +
+        `Expect roughly 300 KB. A near-empty file usually means pdftotext wrote\n` +
+        `nothing, or the download did not finish.`
+    );
+    process.exit(1);
+  }
   if (!fs.existsSync(DB_PATH)) {
     console.error(`No database at ${DB_PATH}.`);
     process.exit(1);
