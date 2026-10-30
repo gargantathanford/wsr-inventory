@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession } from "@/lib/auth";
 import { getAllTools } from "@/lib/queries";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -25,7 +26,7 @@ const ToolInput = z.object({
   quantity_owned: z.coerce.number().int().min(0).default(1),
   storage_location: z.string().optional().nullable(),
   storage_area: z.string().optional().nullable(),
-  responsible_subsystem_id: z.string().optional().nullable(),
+  responsible_subsystem_id: optionalRef.optional(),
   condition: z.string().default("GOOD"),
   status: z.string().default("AVAILABLE"),
   date_acquired: z.string().optional().nullable(),
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Team members cannot add tools." }, { status: 403 });
   }
   const parsed = ToolInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   const db = getDb();

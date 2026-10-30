@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession } from "@/lib/auth";
 import { getAllCalendarEvents } from "@/lib/queries";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -14,19 +15,32 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ events });
 }
 
+const EVENT_TYPES = [
+  "DEADLINE", "MEETING", "MILESTONE", "REVIEW",
+  "COMPETITION", "MANUFACTURING", "TESTING", "ADMINISTRATIVE"
+] as const;
+const NOTIFY_SCOPES = ["EVERYONE", "TEAM", "SUBSYSTEM", "ASSIGNED_USER", "TEAM_LEADS", "ADMINS"] as const;
+
 const EventInput = z.object({
   title: z.string().min(1),
-  description: z.string().optional().nullable(),
-  event_type: z.string().default("DEADLINE"),
-  subsystem_id: z.string().optional().nullable(),
-  responsible_user_id: z.string().optional().nullable(),
+  description: optionalText.optional(),
+  // Enumerated rather than z.string(): the column has a CHECK constraint, and a
+  // value that passes here only to fail in SQLite becomes a 500 instead of a
+  // message naming the field.
+  event_type: z.enum(EVENT_TYPES).default("DEADLINE"),
+  // optionalRef, not z.string().optional().nullable(). The form's "All Teams"
+  // option has value="" and FormData sends it as the empty string, which a
+  // plain optional string accepts and `?? null` does not catch — so "" reached
+  // this FK column and SQLite raised FOREIGN KEY constraint failed as a 500.
+  subsystem_id: optionalRef.optional(),
+  responsible_user_id: optionalRef.optional(),
   deadline_date: z.string().min(1),
-  deadline_time: z.string().optional().nullable(),
+  deadline_time: optionalText.optional(),
   priority: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]).default("MEDIUM"),
-  links: z.string().optional().nullable(),
+  links: optionalText.optional(),
   is_actionable: z.boolean().default(true),
   reminder_intervals: z.array(z.number()).default([7, 1]),
-  notify_scope: z.string().default("TEAM")
+  notify_scope: z.enum(NOTIFY_SCOPES).default("TEAM")
 });
 
 export async function POST(req: NextRequest) {
@@ -36,11 +50,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Team members cannot create calendar events." }, { status: 403 });
   }
   const parsed = EventInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error, "Could not create event");
   const data = parsed.data;
 
   const db = getDb();
   const id = newId("cal");
+  try {
   db.prepare(
     `INSERT INTO calendar_events (
       id, title, description, event_type, subsystem_id, responsible_user_id, deadline_date, deadline_time,
@@ -68,6 +83,9 @@ export async function POST(req: NextRequest) {
   db.prepare(
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'CREATE', 'CALENDAR_EVENT', ?, ?)`
   ).run(newId("log"), user.id, id, data.title);
+  } catch (e) {
+    return dbError(e, "Could not create event");
+  }
 
   return NextResponse.json({ id }, { status: 201 });
 }

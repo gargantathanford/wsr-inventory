@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { awardQuietly } from "@/lib/xp/store";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 const ReceiveInput = z.object({
   line_item_id: z.string().min(1),
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const parsed = ReceiveInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   const lineItem = db.prepare(`SELECT * FROM po_line_items WHERE id = ? AND purchase_order_id = ?`).get(data.line_item_id, params.id) as any;

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession } from "@/lib/auth";
 import { generateRequestNumber } from "@/lib/numbering";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -33,8 +34,8 @@ export async function GET(req: NextRequest) {
 }
 
 const RequestInput = z.object({
-  subsystem_id: z.string().optional().nullable(),
-  part_id: z.string().optional().nullable(),
+  subsystem_id: optionalRef.optional(),
+  part_id: optionalRef.optional(),
   item_name: z.string().min(1),
   item_description: z.string().optional().nullable(),
   quantity: z.coerce.number().int().min(1).default(1),
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const parsed = RequestInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   const db = getDb();

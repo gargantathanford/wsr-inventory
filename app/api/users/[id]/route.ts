@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, hashPassword } from "@/lib/auth";
 import { checkPassword } from "@/lib/password";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 async function requireAdmin() {
   const user = await getSession();
@@ -26,7 +27,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (gate.error) return gate.error;
 
   const parsed = UpdateInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   if (params.id === gate.user!.id && (

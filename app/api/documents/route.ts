@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { getSession } from "@/lib/auth";
 import { getAllDocuments } from "@/lib/queries";
 import { saveUploadedFile, MAX_UPLOAD_BYTES, UnsupportedFileTypeError } from "@/lib/storage";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -19,10 +20,10 @@ const DocInput = z.object({
   title: z.string().min(1),
   doc_type: z.string().default("OTHER"),
   url: z.string().optional().nullable(),
-  subsystem_id: z.string().optional().nullable(),
-  part_id: z.string().optional().nullable(),
-  procedure_id: z.string().optional().nullable(),
-  calendar_event_id: z.string().optional().nullable(),
+  subsystem_id: optionalRef.optional(),
+  part_id: optionalRef.optional(),
+  procedure_id: optionalRef.optional(),
+  calendar_event_id: optionalRef.optional(),
   manufacturer: z.string().optional().nullable(),
   category: z.string().optional().nullable(),
   notes: z.string().optional().nullable()
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
 
   // ---- Link-based path (JSON body) ----
   const parsed = DocInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   db.prepare(

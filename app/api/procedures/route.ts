@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getAllProcedures } from "@/lib/queries";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -18,16 +19,21 @@ export async function GET(req: NextRequest) {
 const ProcedureInput = z.object({
   title: z.string().min(1),
   category: z.string().default("GENERAL"),
-  description: z.string().optional().nullable(),
-  purpose: z.string().optional().nullable(),
-  applicable_teams: z.string().optional().nullable(),
-  subsystem_id: z.string().optional().nullable(),
-  part_id: z.string().optional().nullable(),
-  required_documentation: z.string().optional().nullable(),
-  supporting_links: z.string().optional().nullable(),
-  safety_warning: z.string().optional().nullable(),
+  description: optionalText.optional(),
+  purpose: optionalText.optional(),
+  applicable_teams: optionalText.optional(),
+  // Both of these are FK columns and both are dropdowns with an empty default
+  // option, so both arrived as "" and blew up the INSERT. See apiValidation.ts.
+  subsystem_id: optionalRef.optional(),
+  part_id: optionalRef.optional(),
+  required_documentation: optionalText.optional(),
+  supporting_links: optionalText.optional(),
+  safety_warning: optionalText.optional(),
   revision_number: z.string().default("1.0"),
-  steps: z.array(z.string().min(1)).default([])
+  // A procedure with no steps is not a procedure. This was `.default([])`, so a
+  // form submitted with every step row left blank was accepted and stored as an
+  // empty how-to.
+  steps: z.array(z.string().min(1)).min(1, "add at least one step")
 });
 
 export async function POST(req: NextRequest) {
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
   }
 
   const parsed = ProcedureInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error, "Could not create procedure");
   const data = parsed.data;
 
   if (data.subsystem_id && !canEditSubsystem(user, data.subsystem_id)) {
@@ -47,6 +53,7 @@ export async function POST(req: NextRequest) {
 
   const db = getDb();
   const id = newId("proc");
+  try {
   db.prepare(
     `INSERT INTO procedures (
       id, title, category, description, purpose, applicable_teams, subsystem_id, part_id,
@@ -77,6 +84,9 @@ export async function POST(req: NextRequest) {
   db.prepare(
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'CREATE', 'PROCEDURE', ?, ?)`
   ).run(newId("log"), user.id, id, data.title);
+  } catch (e) {
+    return dbError(e, "Could not create procedure");
+  }
 
   return NextResponse.json({ id }, { status: 201 });
 }

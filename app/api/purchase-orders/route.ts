@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { generatePoNumber } from "@/lib/numbering";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 function computeTotals(poId: string) {
   const db = getDb();
@@ -48,7 +49,7 @@ const LineItemInput = z.object({
 
 const OrderInput = z.object({
   vendor: z.string().optional().nullable(),
-  subsystem_id: z.string().optional().nullable(),
+  subsystem_id: optionalRef.optional(),
   budget_category: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   line_items: z.array(LineItemInput).min(1)
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
   }
 
   const parsed = OrderInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   if (data.subsystem_id && !canReviewSubsystem(user, data.subsystem_id)) {

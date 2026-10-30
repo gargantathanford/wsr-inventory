@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getAllParts } from "@/lib/queries";
 import { checkPartGates, DESIGN_STATUSES, SPONSOR_ASKS } from "@/lib/partRules";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const parsed = PartInput.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return invalid(parsed.error);
   }
   const data = parsed.data;
 

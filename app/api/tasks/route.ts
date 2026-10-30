@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession } from "@/lib/auth";
 import { getAllTasksDetailed } from "@/lib/queries";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -18,10 +19,10 @@ const TaskInput = z.object({
   title: z.string().min(1),
   description: z.string().optional().nullable(),
   priority: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]).default("MEDIUM"),
-  subsystem_id: z.string().optional().nullable(),
-  subteam_id: z.string().optional().nullable(),
-  part_id: z.string().optional().nullable(),
-  procedure_id: z.string().optional().nullable(),
+  subsystem_id: optionalRef.optional(),
+  subteam_id: optionalRef.optional(),
+  part_id: optionalRef.optional(),
+  procedure_id: optionalRef.optional(),
   assigned_to: z.string().optional().nullable(),
   extra_assignee_ids: z.array(z.string()).optional().default([]),
   assignment_scope: z.enum(["USER", "TEAM", "SUBSYSTEM"]).default("USER"),
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
   const user = await getSession();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const parsed = TaskInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
   const db = getDb();
   const id = newId("task");

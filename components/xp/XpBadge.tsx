@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useXp, type LedgerEntry } from "./XpProvider";
+import { Portal } from "@/components/Portal";
 
 /**
  * The XP surface in the nav. Deliberately small.
@@ -66,7 +67,11 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
   const rows = full ?? ledger;
   const reversedSet = new Set(rows.filter((r) => r.reverses).map((r) => r.reverses!));
 
+  // Portal, not a bare `fixed`: TopBar has backdrop-blur, which makes the
+  // header the containing block for fixed descendants and clipped this entire
+  // drawer to a 56px strip. See components/Portal.tsx.
   return (
+    <Portal>
     <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-label="Your XP history">
       <button type="button" className="absolute inset-0 bg-black/60" onClick={onClose} aria-label="Close" />
       <div className="relative w-full max-w-md h-full overflow-auto border-l border-graphite-700 bg-graphite-950 p-5 space-y-5">
@@ -163,6 +168,7 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

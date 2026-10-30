@@ -6,6 +6,7 @@ import { getSession, hashPassword } from "@/lib/auth";
 import { presenceStatus } from "@/lib/presence";
 import { checkPassword } from "@/lib/password";
 import { issueSetupToken, SETUP_TOKEN_TTL_HOURS } from "@/lib/setupTokens";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 async function requireAdmin() {
   const user = await getSession();
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
   if (gate.error) return gate.error;
 
   const parsed = UserInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   if (data.password) {

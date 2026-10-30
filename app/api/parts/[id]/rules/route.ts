@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getPartById, getRuleByClauseId, getRuleCitations, getActiveRuleset } from "@/lib/queries";
 import { awardQuietly, reverse } from "@/lib/xp/store";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await getSession();
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const parsed = CitationInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
 
   if (!getActiveRuleset()) {
     return NextResponse.json(

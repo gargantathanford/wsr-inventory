@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 const LineItemInput = z.object({
   item_name: z.string().min(1),
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const parsed = LineItemInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   db.prepare(

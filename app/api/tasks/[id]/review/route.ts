@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { awardQuietly, reverse } from "@/lib/xp/store";
 import { getTaskById } from "@/lib/queries";
+import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 const ReviewInput = z.object({
   action: z.enum(["approve", "return"]),
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const parsed = ReviewInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return invalid(parsed.error);
   const data = parsed.data;
 
   if (data.action === "return" && !data.return_reason?.trim()) {
