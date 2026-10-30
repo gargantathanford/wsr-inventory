@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
+import { awardQuietly } from "@/lib/xp/store";
 
 const ReceiveInput = z.object({
   line_item_id: z.string().min(1),
@@ -56,6 +57,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   db.prepare(
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'RECEIVE', 'PURCHASE_ORDER', ?, ?)`
   ).run(newId("log"), user.id, params.id, `${data.quantity_received}x ${lineItem.item_name}`);
+
+  // XP fires only when EVERY line item is accounted for — the reconcile, not
+  // the first box through the door. Receiving one of four items earns nothing,
+  // which is what stops racing to mark an order received before the quantities
+  // have actually been checked.
+  //
+  // The idempotency key is the order, not the receipt, so a partially-received
+  // order that later completes pays exactly once.
+  if (fullyReceived) {
+    awardQuietly({
+      userId: user.id,
+      kind: "po.reconciled",
+      sourceType: "po",
+      sourceId: params.id,
+      transition: "reconciled",
+      at: new Date().toISOString(),
+      subsystemId: order.subsystem_id ?? null,
+      // Ordering it and receiving it alone means nobody else saw what arrived.
+      selfVerified: order.created_by === user.id
+    });
+  }
 
   return NextResponse.json({ ok: true, status: newStatus });
 }

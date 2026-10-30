@@ -4,6 +4,7 @@ import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getPartById, getRuleCitations } from "@/lib/queries";
 import { checkPartGates } from "@/lib/partRules";
+import { awardQuietly, reverse } from "@/lib/xp/store";
 
 const EDITABLE_FIELDS = [
   "part_name",
@@ -110,6 +111,64 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   db.prepare(
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'UPDATE', 'PART', ?, ?)`
   ).run(newId("log"), user.id, params.id, JSON.stringify(Object.keys(updates)));
+
+  // --- XP on real design transitions, compared against the record BEFORE the
+  // patch so re-saving an unchanged part pays nothing.
+
+  // Design freeze: the highest-value transition in the build, and already gated
+  // on an acceptance criterion and a cited rule. Approval-tier.
+  if (merged.design_status === "FROZEN" && existing.design_status !== "FROZEN") {
+    awardQuietly({
+      userId: user.id,
+      kind: "part.designFrozen",
+      sourceType: "part",
+      sourceId: params.id,
+      transition: "frozen",
+      at: new Date().toISOString(),
+      subsystemId: merged.subsystem_id ?? null,
+      selfVerified: existing.owner_user_id === user.id
+    });
+  }
+  // Un-freezing means the award no longer describes reality.
+  if (existing.design_status === "FROZEN" && merged.design_status !== "FROZEN") {
+    reverse("part", params.id, "frozen", `Design status moved from FROZEN to ${merged.design_status}`);
+  }
+
+  // Sourced: vendor, cost AND lead time together. Any one of the three alone
+  // is not sourcing, which is why this checks all three and fires on the
+  // transition rather than on each edit.
+  const sourced = (p: any) =>
+    !!p.supplier && (p.estimated_cost != null || p.estimated_cost_low != null) && p.lead_time_days != null;
+  if (sourced(merged) && !sourced(existing)) {
+    awardQuietly({
+      userId: user.id,
+      kind: "part.sourced",
+      sourceType: "part",
+      sourceId: params.id,
+      transition: "sourced",
+      at: new Date().toISOString(),
+      subsystemId: merged.subsystem_id ?? null
+    });
+  }
+
+  // Long lead flagged early enough to matter: over 4 weeks of lead time, more
+  // than 6 weeks before it is needed. Both numbers have to be present, which is
+  // the point — this rewards knowing, not guessing.
+  if (merged.lead_time_days != null && merged.required_by_date && !existing.required_by_date) {
+    const weeksOfLead = merged.lead_time_days / 7;
+    const daysUntilNeeded = (new Date(merged.required_by_date).getTime() - Date.now()) / 86_400_000;
+    if (weeksOfLead > 4 && daysUntilNeeded > 42) {
+      awardQuietly({
+        userId: user.id,
+        kind: "part.longLeadFlagged",
+        sourceType: "part",
+        sourceId: params.id,
+        transition: "longLeadFlagged",
+        at: new Date().toISOString(),
+        subsystemId: merged.subsystem_id ?? null
+      });
+    }
+  }
 
   return NextResponse.json({ ok: true, warnings: gates.warnings });
 }

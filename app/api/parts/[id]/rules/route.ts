@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canEditSubsystem } from "@/lib/auth";
 import { getPartById, getRuleByClauseId, getRuleCitations, getActiveRuleset } from "@/lib/queries";
+import { awardQuietly, reverse } from "@/lib/xp/store";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await getSession();
@@ -65,6 +66,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      VALUES (?, ?, 'CITE_RULE', 'PART', ?, ?)`
   ).run(newId("log"), user.id, params.id, `${rule.clause_id} — ${part.part_name}`);
 
+  // One award per part, however many clauses get cited — the transition is
+  // "this part now has its rules identified", not "a row was inserted".
+  awardQuietly({
+    userId: user.id,
+    kind: "part.ruleCited",
+    sourceType: "part",
+    sourceId: params.id,
+    transition: "ruleCited",
+    at: new Date().toISOString(),
+    subsystemId: part.subsystem_id ?? null
+  });
+
   return NextResponse.json({ ok: true, clause_id: rule.clause_id }, { status: 201 });
 }
 
@@ -90,6 +103,11 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details)
      VALUES (?, ?, 'UNCITE_RULE', 'PART', ?, ?)`
   ).run(newId("log"), user.id, params.id, part.part_name);
+
+  // If that was the last citation, the part no longer has its rules
+  // identified, so the award stops being true.
+  const left = getRuleCitations("PART", params.id).length;
+  if (left === 0) reverse("part", params.id, "ruleCited", "Last rule citation removed");
 
   return NextResponse.json({ ok: true });
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
+import { awardQuietly, reverse } from "@/lib/xp/store";
 import { getTaskById } from "@/lib/queries";
 
 const ReviewInput = z.object({
@@ -39,6 +40,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     db.prepare(
       `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'APPROVE', 'TASK', ?, ?)`
     ).run(newId("log"), user.id, params.id, task.title);
+
+    // XP attaches HERE — to a lead approving completed work with evidence
+    // attached — never to creating or self-closing a task. The person who did
+    // the work is task.submitted_by, not whoever is approving.
+    //
+    // Self-verified when one person both raised the task and closed it: paid at
+    // 40% and labelled, because nobody else confirmed the work existed.
+    const worker = task.submitted_by ?? task.assigned_to ?? null;
+    if (worker) {
+      const selfVerified = !!task.created_by && task.created_by === worker;
+      awardQuietly({
+        userId: worker,
+        kind: "task.completed",
+        sourceType: "task",
+        sourceId: params.id,
+        transition: "completed",
+        at: new Date().toISOString(),
+        subsystemId: task.subsystem_id ?? null,
+        selfVerified
+      });
+
+      // Critical-path work closed on time is approval-tier: anyone can mark
+      // their own task critical-path, so the points wait for a human.
+      const onTime = !task.due_date || new Date().toISOString().slice(0, 10) <= task.due_date;
+      if (task.priority === "CRITICAL" && onTime) {
+        awardQuietly({
+          userId: worker,
+          kind: "task.criticalPath",
+          sourceType: "task",
+          sourceId: params.id,
+          transition: "criticalPath",
+          at: new Date().toISOString(),
+          subsystemId: task.subsystem_id ?? null,
+          selfVerified
+        });
+      }
+    }
   } else {
     db.prepare(
       `UPDATE tasks SET status = 'IN_PROGRESS', reviewed_by = ?, reviewed_at = datetime('now'), return_reason = ? WHERE id = ?`
@@ -46,6 +84,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     db.prepare(
       `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'RETURN', 'TASK', ?, ?)`
     ).run(newId("log"), user.id, params.id, task.title);
+
+    // Returned for more work: the award is no longer true, so compensate it.
+    // The original event stays in the ledger as the audit trail, and the
+    // deferred first-time-right bonus will never pay for this task now.
+    reverse("task", params.id, "completed", `Returned for additional work: ${data.return_reason}`);
+    reverse("task", params.id, "criticalPath", "Returned for additional work");
   }
 
   return NextResponse.json({ ok: true });
