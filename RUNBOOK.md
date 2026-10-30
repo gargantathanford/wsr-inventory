@@ -30,7 +30,7 @@ always; it works for reads too.
 ## 1. Get the current code
 
 ```bash
-git checkout feat/v2-manual-entry
+git checkout feat/xp-gamification
 git pull
 git log --oneline -1
 ```
