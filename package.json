@@ -14,7 +14,7 @@
     "backup": "tsx scripts/backup.ts",
     "restore": "tsx scripts/restore.ts",
     "test:xp": "node --import tsx --test lib/xp/*.test.ts",
-    "test": "node --import tsx --test lib/**/*.test.ts"
+    "test": "node --import tsx --test lib/*.test.ts lib/*/*.test.ts"
   },
   "dependencies": {
     "bcryptjs": "2.4.3",
