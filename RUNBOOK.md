@@ -1,5 +1,8 @@
 # Runbook — start it up and check it works
 
+Covers the `feat/xp-gamification` branch, which contains every commit from
+`feat/v2-manual-entry`. Deploy that one branch; merging both is redundant.
+
 Every command here runs from the repo root, the folder holding
 `docker-compose.yml`.
 
@@ -108,22 +111,41 @@ docker compose run --rm maint npx tsx scripts/migrate-taxonomy.ts --commit
 subsystems. Nothing is deleted until its rows have been repointed; the script
 refuses to remove a subsystem anything still references.
 
-## 6. Reference data — FSAE deadlines and the how-to procedure
+## 6. XP and shop-time tables
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-xp.ts
+docker compose run --rm maint npx tsx scripts/migrate-xp.ts --commit
+```
+
+**Expect** `3 to create` then `tables created : 3` — `xp_events`,
+`shop_sessions`, `shop_heartbeats`. Additive; no existing row is touched.
+
+Skip this and the app still boots, but the XP badge, the ledger drawer and
+shop check-in all fail at runtime because their tables do not exist.
+
+## 7. Reference data — FSAE deadlines and the how-to procedure
 
 ```bash
 docker compose run --rm maint npx tsx scripts/seed-reference-data.ts
 ```
 
-**Check the ten dates against the current SAE calendar before committing.** They
-were transcribed from the parts workbook and SAE moves dates.
+The deadline dates come from the parts workbook, which Jonathan confirmed was
+built from the SAE calendar. The ruleset itself publishes no dates — Table PS-1
+lists formats and penalty groups only — so the script will not write them
+without an explicit flag:
 
 ```bash
-docker compose run --rm maint npx tsx scripts/seed-reference-data.ts --commit
+docker compose run --rm maint npx tsx scripts/seed-reference-data.ts --commit --dates-verified
 ```
 
 **Expect** `calendar events added : 10` and `procedure added : yes, 14 steps`.
 
-## 7. The FSAE ruleset
+Keep that flag in mind for the 2028 ruleset: re-check the dates then rather
+than assuming they carried over. `--commit --skip-deadlines` seeds only the
+procedure if you ever want the how-to without the calendar.
+
+## 8. The FSAE ruleset
 
 Convert the PDF to text on the host first. The importer takes text, not PDF, so
 no PDF parser runs inside the app.
@@ -145,7 +167,7 @@ docker compose run --rm -v "$PWD/rules-2027.txt:/app/rules-2027.txt:ro" maint \
 report. If it reports fewer than 200 clauses it refuses — the text extraction
 failed and `-layout` was probably missing.
 
-## 8. Start it
+## 9. Start it
 
 ```bash
 docker compose up -d --build app
@@ -164,7 +186,7 @@ curl -i localhost:3000/api/health
   back to step 2.
 - No counts at all means an old image is still running; rebuild.
 
-## 9. Log in
+## 10. Log in
 
 ```bash
 docker compose run --rm maint npx tsx scripts/reset-password.ts --list
@@ -183,7 +205,7 @@ that account's name and email if they are still placeholders.
 
 ---
 
-## 10. Checks, in order
+## 11. Checks, in order
 
 Each one has a specific pass condition. "The page loads" is not one.
 
@@ -205,7 +227,7 @@ at the top level.
 **Part detail** (`/parts/<id>`) — create that part, open it. A "Governing rules"
 panel appears. Type `scatter shield`. **Expect** `T.5.2.7 Chain Drive — Scatter
 shields for chains must:` among the results. Click to attach, click the heading
-to read the clause text. An empty list means step 7 did not run.
+to read the clause text. An empty list means step 8 did not run.
 
 **Shopping list** (`/shopping-list`) — priority shows a band word
 (NORMAL / HIGH / URGENT) under the number; cost shows the line total with the
@@ -219,9 +241,22 @@ ones marked critical.
 
 **Procedures** (`/procedures`) — "How to add a part", 14 steps.
 
+**XP badge** (top bar) — a small lime figure next to the check-in button.
+Click it: the ledger drawer opens and says there is nothing yet. Approve a task
+with evidence and it should jump to 20 with a toast and a confetti burst. A
+blank badge usually means step 6 was skipped.
+
+**Shop time** (`/shop`) — check in from the nav. The button turns green and
+counts elapsed minutes. Check out and the session appears in the table as
+`settled`. Hours are recorded; shop time awards no XP yet by design.
+
+**Login page** — the logo must render. If you see a broken image, the brand
+assets are not reaching the browser; they are allow-listed in `middleware.ts`
+under `PUBLIC_ASSETS`.
+
 ---
 
-## 11. Persistence check
+## 12. Persistence check
 
 Create a part named `PERSISTENCE TEST`, then escalate. Each step destroys more
 than the last. **Note there is no `-v` anywhere** — that flag deletes the volume.
@@ -236,7 +271,7 @@ docker kill $(docker compose ps -q app) && docker compose up -d app   # ungracef
 Reload the browser after each. The part survives all four, or something is
 wrong.
 
-## 12. Schedule backups on the VM
+## 13. Schedule backups on the VM
 
 Only needed on the real server, not for local testing.
 
