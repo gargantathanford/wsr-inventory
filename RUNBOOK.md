@@ -72,6 +72,19 @@ overrode the entrypoint.
 
 This step is not optional. Steps 4 and 5 change the schema.
 
+## 3a. Write down what is in there now
+
+```bash
+docker compose run --rm maint npx tsx scripts/status.ts
+```
+
+Opens the database read-only, so it cannot change anything. Prints row counts
+and which migrations have run. A table that does not exist yet reports `-`
+rather than failing — that is the normal state of `xp_events` before step 6.
+
+Keep this output. You compare against it after step 10: `users` and `parts` must
+not have dropped.
+
 ## 4. Schema migration
 
 Dry run first. It writes nothing.
@@ -204,6 +217,15 @@ curl -i localhost:3000/api/health
 ```json
 {"status":"ok","db":"ok","users":2,"subsystems":15,"parts":0,...}
 ```
+
+Then compare against step 3a:
+
+```bash
+docker compose run --rm maint npx tsx scripts/status.ts
+```
+
+`users` and `parts` must match step 3a exactly. `rules` should now be non-zero
+if step 9 ran, and the XP and security tables should no longer read `-`.
 
 - `"subsystems":15` confirms the taxonomy migration took.
 - `"db":"empty"` with HTTP 503 means the app is on a volume with no users —
