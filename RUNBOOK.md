@@ -1,7 +1,9 @@
 # Runbook — start it up and check it works
 
-Covers the `feat/xp-gamification` branch, which contains every commit from
-`feat/v2-manual-entry`. Deploy that one branch; merging both is redundant.
+Covers the `feat/account-security` branch. It was branched from
+`feat/xp-gamification`, which was branched from `feat/v2-manual-entry`, so it
+contains every commit from all three. Deploy that one branch — merging the
+others as well is redundant.
 
 Every command here runs from the repo root, the folder holding
 `docker-compose.yml`.
@@ -30,7 +32,7 @@ always; it works for reads too.
 ## 1. Get the current code
 
 ```bash
-git checkout feat/xp-gamification
+git checkout feat/account-security
 git pull
 git log --oneline -1
 ```
@@ -78,9 +80,14 @@ Dry run first. It writes nothing.
 docker compose run --rm maint npx tsx scripts/migrate-v2.ts
 ```
 
-**Expect** `18 total, 0 already applied, 18 pending` on a database that has not
-been migrated, and a list of the columns and tables it will add. If it says
-`18 already applied, 0 pending`, it is already done — skip to step 5.
+**Expect** `19 total, 0 already applied, 19 pending` on a database that has not
+been migrated, and a list of the columns and tables it will add.
+
+If you ran an earlier version of this migration, re-run it anyway — it reports
+`18 already applied, 1 pending` and adds the ruleset tables, which shipped in
+schema.sql without a migration and so never reached an existing database. Each
+step is checked independently, so a re-run only applies what is genuinely
+missing.
 
 Then apply:
 
@@ -88,7 +95,7 @@ Then apply:
 docker compose run --rm maint npx tsx scripts/migrate-v2.ts --commit
 ```
 
-**Expect** `schema steps applied : 18`, `subsystem codes backfilled : 10`,
+**Expect** `schema steps applied : 19`, `subsystem codes backfilled : 10`,
 `vehicle targets seeded : 10`. It will also warn that no subsystem exists for
 workbook tab `WHE` — step 5 fixes that.
 
@@ -124,7 +131,24 @@ docker compose run --rm maint npx tsx scripts/migrate-xp.ts --commit
 Skip this and the app still boots, but the XP badge, the ledger drawer and
 shop check-in all fail at runtime because their tables do not exist.
 
-## 7. Reference data — FSAE deadlines and the how-to procedure
+## 7. Account security tables
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-security.ts
+docker compose run --rm maint npx tsx scripts/migrate-security.ts --commit
+```
+
+**Expect** `2 pending` then `steps applied : 2` — the `users.password_changed_at`
+column and the `account_setup_tokens` table.
+
+`password_changed_at` is left NULL for everyone, which reads as "no password
+change recorded", so existing sessions stay valid rather than signing the whole
+team out the moment this lands.
+
+Skip this and sign-in still works, but issuing setup links and the
+change-password page both fail at runtime.
+
+## 8. Reference data — FSAE deadlines and the how-to procedure
 
 ```bash
 docker compose run --rm maint npx tsx scripts/seed-reference-data.ts
@@ -145,7 +169,7 @@ Keep that flag in mind for the 2028 ruleset: re-check the dates then rather
 than assuming they carried over. `--commit --skip-deadlines` seeds only the
 procedure if you ever want the how-to without the calendar.
 
-## 8. The FSAE ruleset
+## 9. The FSAE ruleset
 
 Convert the PDF to text on the host first. The importer takes text, not PDF, so
 no PDF parser runs inside the app.
@@ -167,7 +191,7 @@ docker compose run --rm -v "$PWD/rules-2027.txt:/app/rules-2027.txt:ro" maint \
 report. If it reports fewer than 200 clauses it refuses — the text extraction
 failed and `-layout` was probably missing.
 
-## 9. Start it
+## 10. Start it
 
 ```bash
 docker compose up -d --build app
@@ -186,7 +210,7 @@ curl -i localhost:3000/api/health
   back to step 2.
 - No counts at all means an old image is still running; rebuild.
 
-## 10. Log in
+## 11. Log in
 
 ```bash
 docker compose run --rm maint npx tsx scripts/reset-password.ts --list
@@ -200,12 +224,18 @@ docker compose run --rm maint npx tsx scripts/reset-password.ts --email <that ad
 
 The password prints once. Copy it before the terminal scrolls.
 
+The CLI is the right tool for the FIRST admin specifically — there is nobody
+else who could send them a link. Everyone after that gets a setup link instead
+(step 12), so nobody but the owner ever knows their password.
+
 Open `http://localhost:3000`, log in, then go to **Settings → Users** and fix
-that account's name and email if they are still placeholders.
+that account's name and email if they are still placeholders. Then change your
+own password at **/account** — the CLI printed it to a terminal, which is one
+more place it has existed than necessary.
 
 ---
 
-## 11. Checks, in order
+## 12. Checks, in order
 
 Each one has a specific pass condition. "The page loads" is not one.
 
@@ -227,7 +257,7 @@ at the top level.
 **Part detail** (`/parts/<id>`) — create that part, open it. A "Governing rules"
 panel appears. Type `scatter shield`. **Expect** `T.5.2.7 Chain Drive — Scatter
 shields for chains must:` among the results. Click to attach, click the heading
-to read the clause text. An empty list means step 8 did not run.
+to read the clause text. An empty list means step 9 did not run.
 
 **Shopping list** (`/shopping-list`) — priority shows a band word
 (NORMAL / HIGH / URGENT) under the number; cost shows the line total with the
@@ -254,9 +284,22 @@ counts elapsed minutes. Check out and the session appears in the table as
 assets are not reaching the browser; they are allow-listed in `middleware.ts`
 under `PUBLIC_ASSETS`.
 
+**Setup links** (`/settings/users`) — the create form has no password field.
+Create a throwaway account and the link appears once with a copy button. Open
+it in a private window: it should greet that person by name and refuse a weak
+password with a specific reason. Set one, sign in as them, then open the SAME
+link again — it must say "already been used". If it works twice, stop and tell
+me; single use is the whole point.
+
+**Your account** (`/account`, or your name in the top bar) — change your
+password with the wrong current password and it must refuse. Change it
+correctly and you stay signed in here while any other browser you were signed
+in on gets bounced to the login screen. That is `password_changed_at` doing
+its job.
+
 ---
 
-## 12. Persistence check
+## 13. Persistence check
 
 Create a part named `PERSISTENCE TEST`, then escalate. Each step destroys more
 than the last. **Note there is no `-v` anywhere** — that flag deletes the volume.
@@ -271,7 +314,7 @@ docker kill $(docker compose ps -q app) && docker compose up -d app   # ungracef
 Reload the browser after each. The part survives all four, or something is
 wrong.
 
-## 13. Schedule backups on the VM
+## 14. Schedule backups on the VM
 
 Only needed on the real server, not for local testing.
 

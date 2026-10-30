@@ -91,6 +91,53 @@ const STEPS: Step[] = [
 
   // ---- new tables
   {
+    // The ruleset tables shipped in schema.sql but had no migration, so an
+    // EXISTING database never got them and scripts/import-ruleset.ts failed
+    // with "no such table: rules". Added here rather than in a new script
+    // because these arrived with the rest of the v2 work; migrate-v2 checks
+    // each step independently, so a database that already ran it picks up
+    // only these on a re-run.
+    label: "tables: rulesets, rules, rule_citations",
+    applied: (db) => tableExists(db, "rules"),
+    apply: [
+      `CREATE TABLE IF NOT EXISTS rulesets (
+        id TEXT PRIMARY KEY,
+        label TEXT UNIQUE NOT NULL,
+        year INTEGER NOT NULL,
+        version TEXT,
+        source_filename TEXT,
+        clause_count INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        imported_by TEXT REFERENCES users(id),
+        imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      `CREATE TABLE IF NOT EXISTS rules (
+        id TEXT PRIMARY KEY,
+        ruleset_id TEXT NOT NULL REFERENCES rulesets(id) ON DELETE CASCADE,
+        clause_id TEXT NOT NULL,
+        section TEXT NOT NULL,
+        parent_clause_id TEXT,
+        depth INTEGER NOT NULL,
+        heading TEXT NOT NULL,
+        body TEXT,
+        UNIQUE(ruleset_id, clause_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_rules_ruleset ON rules(ruleset_id, section)`,
+      `CREATE INDEX IF NOT EXISTS idx_rules_clause ON rules(clause_id)`,
+      `CREATE TABLE IF NOT EXISTS rule_citations (
+        id TEXT PRIMARY KEY,
+        rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('PART','PROCEDURE','TASK','INTERFACE')),
+        entity_id TEXT NOT NULL,
+        note TEXT,
+        cited_by TEXT REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(rule_id, entity_type, entity_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_rule_citations_entity ON rule_citations(entity_type, entity_id)`
+    ]
+  },
+  {
     label: "table: vehicle_targets",
     applied: (db) => tableExists(db, "vehicle_targets"),
     apply: [
