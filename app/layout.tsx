@@ -1,9 +1,17 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Warp Speed Racing — Powertrain Inventory & Shopping List",
-  description: "Inventory, shopping list, tools, and technical documentation system for Warp Speed Racing FSAE."
+  title: "Warp Speed Racing — Build Dashboard",
+  description:
+    "Parts, procurement, tools, procedures and build tracking for the Warp Speed Racing Formula SAE team at OSU-Tulsa.",
+  icons: { icon: "/icon.png", apple: "/apple-icon.png" }
+};
+
+// themeColor belongs in the viewport export in the App Router, not in metadata.
+// Matches graphite-950, so mobile browser chrome blends with the app.
+export const viewport: Viewport = {
+  themeColor: "#001117"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

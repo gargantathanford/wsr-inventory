@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import type { SessionUser } from "@/lib/auth";
 
@@ -29,10 +30,13 @@ export function Sidebar({ user }: { user: SessionUser }) {
 
   return (
     <aside className="hidden md:flex w-56 shrink-0 flex-col border-r border-graphite-700/60 bg-graphite-900">
-      <div className="h-14 flex items-center gap-2 px-4 border-b border-graphite-700/60">
-        <span className="h-2 w-2 rounded-full bg-signal animate-pulse" />
+      <Link
+        href="/dashboard"
+        className="h-14 flex items-center gap-2.5 px-4 border-b border-graphite-700/60 hover:bg-graphite-850/60 transition-colors"
+      >
+        <Image src="/wsr-logo.png" alt="" width={520} height={492} className="h-5 w-auto" priority />
         <span className="font-mono text-xs tracking-wide text-graphite-200">WARP SPEED RACING</span>
-      </div>
+      </Link>
       <nav className="flex-1 py-3 overflow-y-auto">
         {NAV.map((item) => {
           const active = pathname === item.href || pathname.startsWith(item.href + "/");

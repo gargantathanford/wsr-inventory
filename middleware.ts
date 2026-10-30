@@ -7,6 +7,18 @@ const secretKey = new TextEncoder().encode(getSessionSecretString());
 
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health"];
 
+/**
+ * Brand assets in public/. These must be reachable WITHOUT a session, because
+ * the login page itself renders the logo — gated, they 307 to /login and the
+ * mark silently fails to load on every screen.
+ *
+ * Listed explicitly rather than allowing any path that looks like a file.
+ * Uploaded documents are served through /api/files and stay behind auth; a
+ * blanket "has a file extension" rule would be one careless route away from
+ * exposing them.
+ */
+const PUBLIC_ASSETS = new Set(["/wsr-logo.png", "/icon.png", "/apple-icon.png", "/favicon.ico"]);
+
 function withSecurityHeaders(res: NextResponse) {
   // Baseline hardening: established header-level mitigations, not custom cryptography.
   res.headers.set("X-Content-Type-Options", "nosniff");
@@ -21,6 +33,7 @@ export async function middleware(req: NextRequest) {
 
   if (
     PUBLIC_PATHS.includes(pathname) ||
+    PUBLIC_ASSETS.has(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon")
   ) {
