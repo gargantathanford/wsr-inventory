@@ -460,6 +460,26 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One-time account setup links. An admin creates an account with no password
+-- and hands over a single-use link; the person chooses their own password, so
+-- there is a moment at which it is known only to them.
+--
+-- Only the SHA-256 of the token is stored: a leaked backup must not hand
+-- somebody a working set of account-takeover links. bcrypt would be the wrong
+-- tool here — it exists to slow down guessing low-entropy secrets, and a
+-- 256-bit random token is not guessable.
+CREATE TABLE IF NOT EXISTS account_setup_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  purpose TEXT NOT NULL DEFAULT 'SETUP' CHECK (purpose IN ('SETUP','RESET')),
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_setup_tokens_user ON account_setup_tokens(user_id, used_at);
+
 -- ---------------- XP LEDGER ----------------
 -- Append-only. Totals are DERIVED by reducing these rows, never stored as a
 -- counter: a counter cannot be audited, cannot be recomputed when the XP table

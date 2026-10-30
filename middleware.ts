@@ -5,7 +5,7 @@ import { getSessionSecretString } from "./lib/env";
 const SESSION_COOKIE = "wsr_session";
 const secretKey = new TextEncoder().encode(getSessionSecretString());
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/health", "/api/auth/setup"];
 
 /**
  * Brand assets in public/. These must be reachable WITHOUT a session, because
@@ -34,6 +34,9 @@ export async function middleware(req: NextRequest) {
   if (
     PUBLIC_PATHS.includes(pathname) ||
     PUBLIC_ASSETS.has(pathname) ||
+    // Setup links are for people who cannot sign in yet — the token in the URL
+    // is the authentication, validated server-side before the page renders.
+    pathname.startsWith("/setup/") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon")
   ) {

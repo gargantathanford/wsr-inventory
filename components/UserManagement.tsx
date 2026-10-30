@@ -162,13 +162,18 @@ function NewUserForm({
 }) {
   const [loading, setLoading] = useState(false);
   const [role, setRole] = useState("TEAM_MEMBER");
+  // Shown once after creating an account with no password. The raw token is
+  // never stored, so if this is lost the only recourse is issuing a new link.
+  const [setupLink, setSetupLink] = useState<{ url: string; name: string; hours: number } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     onError(null);
     const fd = new FormData(e.currentTarget);
-    const payload = Object.fromEntries(fd.entries());
+    const payload: Record<string, unknown> = {};
+    for (const [k, v] of fd.entries()) if (v !== "") payload[k] = v;
     const res = await fetch("/api/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -180,6 +185,11 @@ function NewUserForm({
       onError(typeof data.error === "string" ? data.error : "Could not create user.");
       return;
     }
+    const data = await res.json().catch(() => ({}));
+    if (data.setupUrl) {
+      setSetupLink({ url: data.setupUrl, name: String(payload.name ?? ""), hours: data.ttlHours ?? 72 });
+      setCopied(false);
+    }
     (e.target as HTMLFormElement).reset();
     setRole("TEAM_MEMBER");
     onCreated();
@@ -190,7 +200,9 @@ function NewUserForm({
       <input className="input" name="name" placeholder="Full name" required />
       <input className="input" name="email" type="email" placeholder="Email" required />
       <input className="input" name="phone_number" type="tel" placeholder="Phone number (optional)" />
-      <input className="input" name="password" type="password" placeholder="Temporary password" required minLength={6} />
+      {/* No password field. The account is created without one and the person
+          sets their own from a single-use link, so there is a point at which
+          the password is known only to them. */}
       <select className="input" name="role" value={role} onChange={(e) => setRole(e.target.value)}>
         {ROLES.map((r) => (
           <option key={r} value={r}>
@@ -209,6 +221,32 @@ function NewUserForm({
             </option>
           ))}
         </select>
+      )}
+      {setupLink && (
+        <div className="sm:col-span-4 rounded border border-brand-teal/40 bg-brand-teal/5 px-3 py-3 space-y-2">
+          <p className="text-xs text-graphite-200">
+            Account created for <span className="font-medium">{setupLink.name}</span>. Send them this link — it
+            works once and expires in {setupLink.hours} hours.
+          </p>
+          <div className="flex items-center gap-2">
+            <input className="input font-mono text-[11px]" readOnly value={setupLink.url} onFocus={(ev) => ev.currentTarget.select()} />
+            <button
+              type="button"
+              className="btn-ghost text-xs py-1.5 shrink-0"
+              onClick={() => {
+                navigator.clipboard?.writeText(setupLink.url).then(
+                  () => setCopied(true),
+                  () => setCopied(false)
+                );
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <p className="text-[10px] text-graphite-500">
+            Shown once — it is not stored anywhere. If you lose it, issue a new link from the row below.
+          </p>
+        </div>
       )}
       <div className="sm:col-span-4">
         <button type="submit" disabled={loading} className="btn-primary">
@@ -240,6 +278,8 @@ function UserEditPanel({
   );
   const [active, setActive] = useState(!!user.is_active);
   const [newPassword, setNewPassword] = useState("");
+  const [issuedUrl, setIssuedUrl] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
   const [subsystemToAdd, setSubsystemToAdd] = useState("");
   const [addAsLeader, setAddAsLeader] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -276,6 +316,22 @@ function UserEditPanel({
     const ok = await patch({ is_active: next });
     if (ok) setActive(next);
     setSaving(false);
+  }
+
+  async function issueLink() {
+    setIssuing(true);
+    onError(null);
+    try {
+      const res = await fetch(`/api/users/${user.id}/setup-link`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        onError(typeof data.error === "string" ? data.error : "Could not issue a link.");
+        return;
+      }
+      setIssuedUrl(data.url);
+    } finally {
+      setIssuing(false);
+    }
   }
 
   async function resetPassword() {
@@ -379,19 +435,55 @@ function UserEditPanel({
         </div>
 
         <div className="pt-4">
-          <div className="data-label mb-1.5">RESET PASSWORD</div>
-          <div className="flex gap-2">
-            <input
-              className="input"
-              type="password"
-              placeholder="New password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-            <button className="btn-ghost text-xs" disabled={saving || !newPassword} onClick={resetPassword}>
-              Set
-            </button>
-          </div>
+          <div className="data-label mb-1.5">PASSWORD</div>
+          <button className="btn-ghost text-xs w-full" disabled={saving || !active} onClick={issueLink}>
+            {issuing ? "Issuing…" : "Send a setup link"}
+          </button>
+          <p className="text-[10px] text-graphite-500 mt-1.5 leading-snug">
+            Issues a one-time link so they choose their own password. Revokes any link already outstanding.
+          </p>
+
+          {issuedUrl && (
+            <div className="mt-2 rounded border border-brand-teal/40 bg-brand-teal/5 px-2.5 py-2 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <input
+                  className="input font-mono text-[10px]"
+                  readOnly
+                  value={issuedUrl}
+                  onFocus={(ev) => ev.currentTarget.select()}
+                />
+                <button
+                  type="button"
+                  className="btn-ghost text-[11px] py-1 shrink-0"
+                  onClick={() => navigator.clipboard?.writeText(issuedUrl)}
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="text-[10px] text-graphite-500">Shown once. Not stored anywhere.</p>
+            </div>
+          )}
+
+          <details className="mt-3">
+            <summary className="text-[10px] text-graphite-500 cursor-pointer hover:text-graphite-300">
+              Or set a password directly
+            </summary>
+            <div className="flex gap-2 mt-2">
+              <input
+                className="input"
+                type="password"
+                placeholder="New password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+              <button className="btn-ghost text-xs" disabled={saving || !newPassword} onClick={resetPassword}>
+                Set
+              </button>
+            </div>
+            <p className="text-[10px] text-graphite-500 mt-1.5 leading-snug">
+              Signs them out everywhere, and means you know their password. Prefer the link.
+            </p>
+          </details>
         </div>
       </div>
 
