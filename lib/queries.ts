@@ -936,3 +936,42 @@ export function getPartsCitingClause(clauseId: string) {
     )
     .all(clauseId.toUpperCase()) as any[];
 }
+
+/**
+ * Readiness per subsystem, keyed by workbook code, for the build schematic.
+ *
+ * Unlike getSubsystemReadiness this includes subsystems with NO parts yet and
+ * returns the code, because the schematic needs to draw every region of the car
+ * — a subsystem nobody has entered parts for is a meaningful state ("not
+ * started"), not a reason to leave a hole in the drawing.
+ */
+export function getReadinessByCode(): Record<
+  string,
+  { name: string; slug: string; pct: number; partCount: number; ownedCount: number }
+> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT s.code, s.name, s.slug,
+              COUNT(p.id) AS part_count,
+              COALESCE(SUM(CASE WHEN p.status IN ('OWNED','AVAILABLE_FOR_INSTALLATION','INSTALLED')
+                                THEN 1 ELSE 0 END), 0) AS owned_count
+         FROM subsystems s
+         LEFT JOIN parts p ON p.subsystem_id = s.id
+        WHERE s.code IS NOT NULL
+        GROUP BY s.id`
+    )
+    .all() as Array<{ code: string; name: string; slug: string; part_count: number; owned_count: number }>;
+
+  const out: Record<string, { name: string; slug: string; pct: number; partCount: number; ownedCount: number }> = {};
+  for (const r of rows) {
+    out[r.code] = {
+      name: r.name,
+      slug: r.slug,
+      partCount: r.part_count,
+      ownedCount: r.owned_count,
+      pct: r.part_count > 0 ? Math.round((r.owned_count / r.part_count) * 100) : 0
+    };
+  }
+  return out;
+}

@@ -6,15 +6,18 @@ import {
   getSubsystemReadiness,
   getCriticalProcurementItems,
   getBlockingComponents,
-  getMissingTools
+  getMissingTools,
+  getReadinessByCode
 } from "@/lib/queries";
 import { statusLabel } from "@/lib/scoring";
 import { StatCard } from "@/components/StatCard";
 import { ProgressBar } from "@/components/ProgressBar";
 import { StatusDonut } from "@/components/charts/StatusDonut";
 import { ImportanceBadge } from "@/components/StatusBadge";
+import { BuildSchematic } from "@/components/BuildSchematic";
 
 export default async function DashboardPage() {
+  const readinessByCode = getReadinessByCode();
   const user = await getSession();
   const stats = getGlobalStats();
   const breakdown = getStatusBreakdown();
@@ -79,6 +82,18 @@ export default async function DashboardPage() {
           </div>
         </div>
       )}
+
+      <section className="panel p-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <h2 className="text-sm font-medium text-graphite-200">The car, as it stands</h2>
+          <Link href="/subsystems" className="font-mono text-[11px] text-signal hover:text-signal-bright">
+            ALL SUBSYSTEMS →
+          </Link>
+        </div>
+        <div className="mt-4">
+          <BuildSchematic readiness={readinessByCode} />
+        </div>
+      </section>
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="panel p-6 lg:col-span-2">
