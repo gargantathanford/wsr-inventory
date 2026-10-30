@@ -456,6 +456,77 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ---------------- XP LEDGER ----------------
+-- Append-only. Totals are DERIVED by reducing these rows, never stored as a
+-- counter: a counter cannot be audited, cannot be recomputed when the XP table
+-- changes, and silently loses points on a failed write.
+--
+-- There is no UPDATE path for points and no DELETE route. An award that is no
+-- longer true gets a compensating row with reverses = <original id>, and the
+-- original stays visible. The only column that is ever updated is the approval
+-- pair, when a PENDING award is approved.
+CREATE TABLE IF NOT EXISTS xp_events (
+  -- Idempotency key: 'sourceType:sourceId:transition' for an award, or
+  -- 'rev:<original id>' for a reversal. PRIMARY KEY is what makes paying twice
+  -- for the same transition impossible at the database level rather than by
+  -- convention — this is the defence against close-and-reopen farming.
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  -- Always positive. Reversal rows also hold positive points and are excluded
+  -- from totals by reference, so no code path can render a score going down.
+  points INTEGER NOT NULL CHECK (points >= 0),
+  awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  subsystem_id TEXT REFERENCES subsystems(id) ON DELETE SET NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  transition TEXT NOT NULL,
+  -- One person created the item, closed it and supplied its evidence: paid at
+  -- 40% and shown as self-verified rather than hidden.
+  self_verified INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'AWARDED' CHECK (status IN ('PENDING','AWARDED','REVERSED','VOID')),
+  approved_by TEXT REFERENCES users(id),
+  approved_at TEXT,
+  reverses TEXT REFERENCES xp_events(id),
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_xp_user ON xp_events(user_id, awarded_at);
+CREATE INDEX IF NOT EXISTS idx_xp_status ON xp_events(status);
+CREATE INDEX IF NOT EXISTS idx_xp_source ON xp_events(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_xp_reverses ON xp_events(reverses);
+
+-- Shop presence sessions. Deliberately holds NO raw coordinates: only whether
+-- a heartbeat was inside the geofence, how accurate it was, and when. If an
+-- officer later asks for "just the coordinates so we can check", the schema
+-- does not have them. That is the design, not an oversight.
+CREATE TABLE IF NOT EXISTS shop_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  opened_at TEXT NOT NULL,
+  closed_at TEXT,
+  -- JSON array of the factors that verified the open. Two are required.
+  open_factors TEXT NOT NULL DEFAULT '[]',
+  close_method TEXT CHECK (close_method IS NULL OR close_method IN ('geofence','manual','auto','manual-late')),
+  verified_minutes INTEGER NOT NULL DEFAULT 0,
+  unverified_minutes INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','settled','void')),
+  witness_user_id TEXT REFERENCES users(id),
+  corrected_by TEXT REFERENCES users(id),
+  correction_note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shop_user ON shop_sessions(user_id, opened_at);
+CREATE INDEX IF NOT EXISTS idx_shop_state ON shop_sessions(state);
+
+CREATE TABLE IF NOT EXISTS shop_heartbeats (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES shop_sessions(id) ON DELETE CASCADE,
+  inside_geofence INTEGER NOT NULL,
+  accuracy REAL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_heartbeat_session ON shop_heartbeats(session_id, at);
+
 -- ---------------- FSAE RULESET ----------------
 -- A ruleset is never overwritten. SAE renumbers, merges and deletes clauses
 -- between years, so a new edition is imported as a new version and existing
