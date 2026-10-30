@@ -72,7 +72,29 @@ overrode the entrypoint.
 
 This step is not optional. Steps 4 and 5 change the schema.
 
-## 3a. Write down what is in there now
+## 3a. Rebuild the maintenance image — before any migration
+
+**Do this before step 4.** The `maint`, `backup` and `restore` services have no
+bind mount: they run the scripts baked into the image at build time. If your
+image predates the branch you just checked out, the new scripts are simply not
+in there, and you get:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/scripts/<name>.ts'
+```
+
+That is not a broken script. It is an image older than the code.
+
+```bash
+docker compose build maint
+```
+
+Takes a few minutes the first time and is mostly cached afterwards. The `app`
+build in step 10 reuses these layers, so this costs almost nothing overall.
+
+Rebuild again any time you check out a branch that adds or changes a script.
+
+## 3b. Write down what is in there now
 
 ```bash
 docker compose run --rm maint npx tsx scripts/status.ts
@@ -218,13 +240,13 @@ curl -i localhost:3000/api/health
 {"status":"ok","db":"ok","users":2,"subsystems":15,"parts":0,...}
 ```
 
-Then compare against step 3a:
+Then compare against step 3b:
 
 ```bash
 docker compose run --rm maint npx tsx scripts/status.ts
 ```
 
-`users` and `parts` must match step 3a exactly. `rules` should now be non-zero
+`users` and `parts` must match step 3b exactly. `rules` should now be non-zero
 if step 9 ran, and the XP and security tables should no longer read `-`.
 
 - `"subsystems":15` confirms the taxonomy migration took.
