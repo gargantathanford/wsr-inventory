@@ -59,6 +59,19 @@ RUN groupadd --system --gid 1001 wsrapp \
 # next.config.mjs's `output: "standalone"`.
 COPY --from=builder --chown=wsrapp:wsrapp /app/.next/standalone ./
 COPY --from=builder --chown=wsrapp:wsrapp /app/.next/static ./.next/static
+# public/ is NOT part of the standalone bundle — verified: .next/standalone
+# contains only server.js, package.json, node_modules, lib and data. Next
+# serves /wsr-logo.png straight off disk from public/, so without this COPY
+# every brand asset 404s in the image while working perfectly under `next dev`
+# from the repo. Same reason .next/static is copied on the line above.
+COPY --from=builder --chown=wsrapp:wsrapp /app/public ./public
+# Fail the BUILD rather than ship a container that 404s its own logo. Cheap,
+# and the failure names the file instead of showing up as a broken image on the
+# login page, which is where this one was found.
+RUN test -f ./public/wsr-logo.png \
+    && test -f ./public/icon.png \
+    && test -f ./public/apple-icon.png \
+    || (echo "FATAL: brand assets missing from public/ — the login page will render a broken image" && exit 1)
 # lib/db.ts reads this at runtime via path.join(process.cwd(), "lib", "schema.sql") —
 # a filesystem read, not an import, so copy it explicitly rather than relying on
 # Next's output file tracing to pick it up.
