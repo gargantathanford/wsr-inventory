@@ -19,7 +19,16 @@ import {
   type Totals,
   type XpEvent
 } from "./ledger";
-import { awardKey, computeStreak, localDay, settleShopSession, type StreakResult } from "./rules";
+import {
+  awardKey,
+  computeStreak,
+  isStale,
+  localDay,
+  PRESENCE_XP_ENABLED,
+  settleShopSession,
+  SHOP,
+  type StreakResult
+} from "./rules";
 
 /**
  * The team works in one place, so one configured timezone IS everyone's local
@@ -291,7 +300,7 @@ export function settleSession(sessionId: string, timeZone = TEAM_TIMEZONE): { po
     alreadyEarnedThisWeek: presenceWeek
   });
 
-  if (settlement.points > 0) {
+  if (settlement.points > 0 && PRESENCE_XP_ENABLED) {
     awardQuietly({
       userId: s.user_id,
       kind: "shop.sessionSettled",
@@ -309,7 +318,171 @@ export function settleSession(sessionId: string, timeZone = TEAM_TIMEZONE): { po
       awardKey("shop", sessionId, "settled")
     );
   }
+  // With presence XP off, the hours are the deliverable. Report what the
+  // session WOULD have earned so the number is visible when the flag flips,
+  // but pay nothing.
+  if (!PRESENCE_XP_ENABLED) {
+    return {
+      points: 0,
+      reason:
+        settlement.points > 0
+          ? `${settlement.recordedMinutes} minutes recorded. Presence XP is not enabled yet.`
+          : settlement.reason
+    };
+  }
   return { points: settlement.points, reason: settlement.reason };
+}
+
+// ---------------------------------------------------------------------------
+// SHOP SESSIONS
+// ---------------------------------------------------------------------------
+
+export interface ShopSessionRow {
+  id: string;
+  user_id: string;
+  opened_at: string;
+  closed_at: string | null;
+  open_factors: string;
+  close_method: string | null;
+  verified_minutes: number;
+  unverified_minutes: number;
+  state: "open" | "settled" | "void";
+  correction_note: string | null;
+}
+
+const minutesBetween = (a: string, b: string): number =>
+  Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60_000));
+
+export function getOpenSession(userId: string): ShopSessionRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM shop_sessions WHERE user_id = ? AND state = 'open' ORDER BY opened_at DESC LIMIT 1`)
+    .get(userId) as ShopSessionRow | undefined;
+}
+
+/**
+ * Open a session.
+ *
+ * One open session per person globally: opening a second closes the first as
+ * void. Without that rule a forgotten session on a laptop quietly accumulates
+ * while the person works from their phone.
+ *
+ * No verification factors in v1 — everything lands in unverified_minutes and
+ * open_factors stays empty. The columns exist so turning verification on later
+ * is a feature, not a migration.
+ */
+export function openSession(userId: string, at = new Date().toISOString()): ShopSessionRow {
+  const db = getDb();
+  const existing = getOpenSession(userId);
+  if (existing) {
+    db.prepare(
+      `UPDATE shop_sessions SET state = 'void', closed_at = ?, close_method = 'auto',
+         correction_note = 'Voided automatically because a newer session was opened.' WHERE id = ?`
+    ).run(at, existing.id);
+  }
+
+  const id = newId("shop");
+  db.prepare(
+    `INSERT INTO shop_sessions (id, user_id, opened_at, open_factors, state) VALUES (?, ?, ?, '[]', 'open')`
+  ).run(id, userId, at);
+  db.prepare(
+    `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details)
+     VALUES (?, ?, 'SHOP_OPEN', 'SHOP_SESSION', ?, 'Checked in')`
+  ).run(newId("log"), userId, id);
+
+  return getDb().prepare(`SELECT * FROM shop_sessions WHERE id = ?`).get(id) as ShopSessionRow;
+}
+
+/** Close the caller's open session and settle it. Returns null if none was open. */
+export function closeSession(
+  userId: string,
+  at = new Date().toISOString(),
+  timeZone = TEAM_TIMEZONE
+): { session: ShopSessionRow; points: number; reason: string } | null {
+  const db = getDb();
+  const open = getOpenSession(userId);
+  if (!open) return null;
+
+  // Past the 04:00 boundary this session is no longer a credible record of a
+  // single visit, so it voids rather than logging an implausible duration.
+  const stale = isStale(open.opened_at, at, timeZone);
+  const minutes = minutesBetween(open.opened_at, at);
+
+  db.prepare(
+    `UPDATE shop_sessions SET closed_at = ?, close_method = ?, state = ?,
+       unverified_minutes = ?, correction_note = ? WHERE id = ?`
+  ).run(
+    at,
+    stale ? "auto" : "manual",
+    stale ? "void" : "settled",
+    stale ? minutes : minutes,
+    stale ? `Open past ${SHOP.autoVoidHourLocal}:00 local — voided. Ask a lead for a late close if the time is right.` : null,
+    open.id
+  );
+
+  db.prepare(
+    `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details)
+     VALUES (?, ?, 'SHOP_CLOSE', 'SHOP_SESSION', ?, ?)`
+  ).run(newId("log"), userId, open.id, `${minutes} minutes${stale ? " (voided, left open overnight)" : ""}`);
+
+  const settled = settleSession(open.id, timeZone);
+  const session = db.prepare(`SELECT * FROM shop_sessions WHERE id = ?`).get(open.id) as ShopSessionRow;
+  return { session, points: settled?.points ?? 0, reason: settled?.reason ?? "" };
+}
+
+/**
+ * Void every session left open past the local 04:00 boundary.
+ *
+ * Called opportunistically whenever the shop API is read, and available as
+ * scripts/void-stale-sessions.ts for a cron job. Doing it on read means the
+ * timesheet is never showing a 40-hour open session just because no scheduled
+ * job ran.
+ */
+export function voidStaleSessions(now = new Date().toISOString(), timeZone = TEAM_TIMEZONE): number {
+  const db = getDb();
+  const open = db.prepare(`SELECT * FROM shop_sessions WHERE state = 'open'`).all() as ShopSessionRow[];
+  let voided = 0;
+  for (const s of open) {
+    if (!isStale(s.opened_at, now, timeZone)) continue;
+    db.prepare(
+      `UPDATE shop_sessions SET state = 'void', closed_at = ?, close_method = 'auto',
+         unverified_minutes = ?, correction_note = ? WHERE id = ?`
+    ).run(
+      now,
+      minutesBetween(s.opened_at, now),
+      `Left open past ${SHOP.autoVoidHourLocal}:00 local and voided. An unclosed session records no credited time.`,
+      s.id
+    );
+    voided++;
+  }
+  return voided;
+}
+
+/** A person's own session history, newest first. */
+export function getSessions(userId: string, limit = 50): ShopSessionRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM shop_sessions WHERE user_id = ? ORDER BY opened_at DESC LIMIT ?`)
+    .all(userId, limit) as ShopSessionRow[];
+}
+
+/**
+ * Hours per person over a window, for leads. A person's session history is
+ * visible to them and to leads — not to the whole team.
+ */
+export function getTeamHours(sinceIso: string) {
+  return getDb()
+    .prepare(
+      `SELECT u.id, u.name,
+              COUNT(s.id) AS sessions,
+              COALESCE(SUM(CASE WHEN s.state = 'settled'
+                   THEN s.verified_minutes + s.unverified_minutes ELSE 0 END), 0) AS minutes,
+              COALESCE(SUM(CASE WHEN s.state = 'void' THEN 1 ELSE 0 END), 0) AS voided
+         FROM users u
+         LEFT JOIN shop_sessions s ON s.user_id = u.id AND s.opened_at >= ?
+        WHERE u.is_active = 1
+        GROUP BY u.id
+        ORDER BY minutes DESC, u.name`
+    )
+    .all(sinceIso) as Array<{ id: string; name: string; sessions: number; minutes: number; voided: number }>;
 }
 
 /**

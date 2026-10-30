@@ -368,11 +368,12 @@ describe("shop settlement through the store", () => {
     (globalThis as any).__wsrDb = undefined;
   }
 
-  test("two verified hours award 12 and record the hours", () => {
+  test("hours are recorded but presence XP is withheld in v1", () => {
     session();
     const r = store.settleSession("shop1", "America/Chicago");
-    assert.equal(r?.points, 12);
-    assert.equal(store.getTotals("u_member").total, 12);
+    assert.equal(r?.points, 0, "PRESENCE_XP_ENABLED is false");
+    assert.match(r!.reason, /120 minutes recorded/);
+    assert.equal(store.getTotals("u_member").total, 0);
   });
 
   test("an open session awards nothing", () => {
@@ -387,11 +388,12 @@ describe("shop settlement through the store", () => {
     assert.equal(store.getTotals("u_member").total, 0);
   });
 
-  test("the presence cap binds within a day", () => {
+  test("a long session still records every minute", () => {
     session({ verified_minutes: 600 });
     const r = store.settleSession("shop1", "America/Chicago");
-    assert.equal(r?.points, 25, "capped at the presence limit");
-    assert.ok(r && /earned/.test(r.reason));
+    assert.equal(r?.points, 0);
+    const row = store.getSessions("u_member")[0];
+    assert.equal(row.verified_minutes, 600, "the timesheet keeps the real hours");
   });
 });
 
@@ -438,5 +440,76 @@ describe("deferred first-time-right", () => {
     store.settleDeferred("u_member");
     store.settleDeferred("u_member");
     assert.equal(store.getTotals("u_member").total, 10, "paid once however often the ledger is read");
+  });
+});
+
+
+describe("check-in and check-out", () => {
+  test("opening then closing records the elapsed minutes", () => {
+    const opened = store.openSession("u_member", "2026-10-30T18:00:00Z");
+    assert.equal(opened.state, "open");
+    assert.equal(store.getOpenSession("u_member")?.id, opened.id);
+
+    const closed = store.closeSession("u_member", "2026-10-30T20:30:00Z", "America/Chicago");
+    assert.ok(closed);
+    assert.equal(closed!.session.state, "settled");
+    assert.equal(closed!.session.unverified_minutes, 150);
+    assert.equal(store.getOpenSession("u_member"), undefined);
+  });
+
+  test("no verification factors are recorded in v1", () => {
+    const s = store.openSession("u_member", "2026-10-30T18:00:00Z");
+    assert.equal(s.open_factors, "[]", "the column exists but stays empty until verification lands");
+  });
+
+  test("opening a second session voids the first", () => {
+    const first = store.openSession("u_member", "2026-10-30T14:00:00Z");
+    const second = store.openSession("u_member", "2026-10-30T18:00:00Z");
+    assert.notEqual(first.id, second.id);
+    const rows = store.getSessions("u_member");
+    const old = rows.find((r) => r.id === first.id)!;
+    assert.equal(old.state, "void");
+    assert.match(old.correction_note!, /newer session/);
+    assert.equal(store.getOpenSession("u_member")?.id, second.id);
+  });
+
+  test("closing with nothing open is null, not an error", () => {
+    assert.equal(store.closeSession("u_member", "2026-10-30T20:00:00Z", "America/Chicago"), null);
+  });
+
+  test("a session left open overnight voids on close", () => {
+    store.openSession("u_member", "2026-10-31T01:00:00Z"); // 20:00 local on the 30th
+    const closed = store.closeSession("u_member", "2026-10-31T16:00:00Z", "America/Chicago"); // 11:00 local
+    assert.equal(closed!.session.state, "void");
+    assert.match(closed!.session.correction_note!, /voided/i);
+    assert.equal(closed!.points, 0);
+  });
+
+  test("the sweep voids stale sessions and leaves fresh ones alone", () => {
+    store.openSession("u_member", "2026-10-31T01:00:00Z"); // overnight
+    store.openSession("u_lead", "2026-10-31T15:00:00Z"); // same local day as the check below
+    const voided = store.voidStaleSessions("2026-10-31T16:00:00Z", "America/Chicago");
+    assert.equal(voided, 1);
+    assert.equal(store.getOpenSession("u_member"), undefined, "stale one closed");
+    assert.ok(store.getOpenSession("u_lead"), "fresh one untouched");
+  });
+
+  test("the sweep is idempotent", () => {
+    store.openSession("u_member", "2026-10-31T01:00:00Z");
+    assert.equal(store.voidStaleSessions("2026-10-31T16:00:00Z", "America/Chicago"), 1);
+    assert.equal(store.voidStaleSessions("2026-10-31T16:00:00Z", "America/Chicago"), 0);
+  });
+
+  test("team hours roll up settled time and count voids separately", () => {
+    store.openSession("u_member", "2026-10-30T18:00:00Z");
+    store.closeSession("u_member", "2026-10-30T20:00:00Z", "America/Chicago");
+    store.openSession("u_member", "2026-10-31T01:00:00Z"); // will void
+    store.closeSession("u_member", "2026-10-31T16:00:00Z", "America/Chicago");
+
+    const rows = store.getTeamHours("2026-10-01T00:00:00Z");
+    const mine = rows.find((r) => r.id === "u_member")!;
+    assert.equal(mine.minutes, 120, "only the settled session counts toward hours");
+    assert.equal(mine.voided, 1);
+    assert.equal(mine.sessions, 2);
   });
 });

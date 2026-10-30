@@ -219,8 +219,50 @@ export const SHOP = {
   outsideGeofenceMinutesBeforeAutoClose: 20
 } as const;
 
+/**
+ * Presence XP is OFF for v1.
+ *
+ * Without a verification factor, presence XP is 25 points a day for typing "I
+ * was here four hours" — the one genuinely farmable thing in the system, and
+ * farmable by accident when somebody forgets to close a session.
+ *
+ * The HOURS are recorded regardless and are valuable on their own: leads need
+ * real hours for competition documentation and for noticing who is drowning.
+ * After a month of real data we will know whether verification is needed, and
+ * whether it is worth paying for presence at all.
+ *
+ * Turning it on is this one constant. The settlement arithmetic below is
+ * already written and tested, so nothing else changes.
+ */
+export const PRESENCE_XP_ENABLED = false;
+
 export type ShopSessionState = "open" | "settled" | "void";
 export type VerificationFactor = "geofence" | "doorCode" | "coPresence";
+
+/**
+ * Whether an open session has run past the local auto-void hour.
+ *
+ * This is data hygiene, not anti-fraud: without it one forgotten session logs
+ * eighteen hours and the timesheet becomes fiction. It applies whether or not
+ * any verification exists.
+ *
+ * A session is voided once a 04:00 local boundary has passed since it opened.
+ */
+export function isStale(openedAt: string, now: string, timeZone: string): boolean {
+  const openedDay = localDay(openedAt, timeZone);
+  const nowDay = localDay(now, timeZone);
+  if (nowDay === openedDay) return false;
+
+  // Opened yesterday: stale only once today's 04:00 has passed. Comparing the
+  // local hour avoids constructing a zoned timestamp.
+  const nowHour = Number(
+    new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", hour12: false }).format(new Date(now))
+  );
+  if (nowDay === addDaysExported(openedDay, 1)) return nowHour >= SHOP.autoVoidHourLocal;
+
+  // Opened two or more local days ago — unambiguously stale.
+  return true;
+}
 
 export interface ShopSessionInput {
   verifiedMinutes: number;
@@ -365,6 +407,9 @@ export function localDay(iso: string, timeZone: string): string {
     day: "2-digit"
   }).format(new Date(iso));
 }
+
+/** Shift a YYYY-MM-DD local date by whole days. Exported for isStale. */
+export const addDaysExported = (day: string, n: number): string => addDays(day, n);
 
 const addDays = (day: string, n: number): string => {
   const d = new Date(`${day}T00:00:00Z`);

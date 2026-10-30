@@ -19,7 +19,9 @@ import {
   localDay,
   pointsFor,
   requiresApproval,
-  settleShopSession
+  settleShopSession,
+  PRESENCE_XP_ENABLED,
+  isStale
 } from "./rules";
 import {
   deriveTotals,
@@ -479,5 +481,61 @@ describe("totals", () => {
   test("void events are excluded", () => {
     const t = deriveTotals([award({ id: "a", points: 20 }), award({ id: "b", points: 20, status: "VOID" })]);
     assert.equal(t.total, 20);
+  });
+});
+
+describe("presence XP flag", () => {
+  test("is off for v1 — hours are recorded, points are not paid", () => {
+    assert.equal(PRESENCE_XP_ENABLED, false);
+  });
+
+  test("the settlement arithmetic still works, so turning it on is one constant", () => {
+    const r = settleShopSession({
+      verifiedMinutes: 120,
+      unverifiedMinutes: 0,
+      openFactors: ["geofence", "doorCode"],
+      closeMethod: "geofence",
+      state: "settled",
+      alreadyEarnedToday: 0,
+      alreadyEarnedThisWeek: 0
+    });
+    assert.equal(r.points, 12);
+  });
+});
+
+describe("stale sessions (04:00 local auto-void)", () => {
+  const TZC = "America/Chicago";
+
+  test("a session open the same local day is not stale", () => {
+    // opened 14:00 local, checked at 20:00 local
+    assert.equal(isStale("2026-10-30T19:00:00Z", "2026-10-31T01:00:00Z", TZC), false);
+  });
+
+  test("open overnight but before 04:00 is not yet stale", () => {
+    // opened 20:00 local on the 30th, now 02:00 local on the 31st
+    assert.equal(isStale("2026-10-31T01:00:00Z", "2026-10-31T07:00:00Z", TZC), false);
+  });
+
+  test("open past 04:00 the next local day is stale", () => {
+    // opened 20:00 local on the 30th, now 05:00 local on the 31st
+    assert.equal(isStale("2026-10-31T01:00:00Z", "2026-10-31T10:00:00Z", TZC), true);
+  });
+
+  test("open two local days is stale regardless of hour", () => {
+    assert.equal(isStale("2026-10-29T19:00:00Z", "2026-10-31T06:00:00Z", TZC), true);
+  });
+
+  test("an unverified session is treated no differently — this is hygiene, not fraud", () => {
+    const r = settleShopSession({
+      verifiedMinutes: 0,
+      unverifiedMinutes: 240,
+      openFactors: [],
+      closeMethod: "auto",
+      state: "void",
+      alreadyEarnedToday: 0,
+      alreadyEarnedThisWeek: 0
+    });
+    assert.equal(r.points, 0);
+    assert.equal(r.recordedMinutes, 240, "the hours are still on the timesheet");
   });
 });

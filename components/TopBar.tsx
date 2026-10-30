@@ -6,6 +6,7 @@ import type { SessionUser } from "@/lib/auth";
 import { NotificationBell } from "@/components/NotificationBell";
 import { OnlineCounter } from "@/components/OnlineCounter";
 import { XpBadge } from "@/components/xp/XpBadge";
+import { CheckInControl } from "@/components/shop/CheckInControl";
 
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Admin",
@@ -40,6 +41,8 @@ export function TopBar({ user }: { user: SessionUser }) {
       </form>
       <div className="ml-auto flex items-center gap-4">
         <OnlineCounter className="hidden md:flex" />
+        {/* Visible elapsed time is the cheapest fix for forgetting to check out. */}
+        <CheckInControl />
         {/* Small and quiet on purpose — XP is never the headline number. */}
         <XpBadge />
         <NotificationBell />
