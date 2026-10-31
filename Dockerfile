@@ -39,6 +39,22 @@ RUN groupadd --system --gid 1001 wsrapp \
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
+# A stamp of what went into this image, reported by /api/health.
+#
+# `docker compose restart app` restarts the CONTAINER, which re-runs the image
+# that is already built — it does not look at the working tree. So a `git pull`
+# followed by a restart leaves the old app running with no error anywhere, and
+# the only symptom is a feature that is "missing". This stamp makes that state
+# one curl away from being obvious instead of something to deduce.
+#
+# `at` needs no cooperation from the caller: this layer sits after the source
+# COPY, so any code change rebuilds it. `ref` is the commit, and is only as
+# good as the --build-arg (see docker-compose.yml), which is why both are
+# reported — a stamp older than your pull is proof regardless of the ref.
+ARG BUILD_REF=unknown
+RUN printf '{"ref":"%s","at":"%s"}' \
+      "$BUILD_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /app/.build-stamp
+
 # seed/maint run from this stage and mount the same data volume, so they need the
 # identical ownership-fixing entrypoint the runner stage uses.
 RUN apt-get update && apt-get install -y --no-install-recommends gosu \
@@ -76,6 +92,8 @@ RUN test -f ./public/wsr-logo.png \
 # a filesystem read, not an import, so copy it explicitly rather than relying on
 # Next's output file tracing to pick it up.
 COPY --from=builder --chown=wsrapp:wsrapp /app/lib/schema.sql ./lib/schema.sql
+# Same deal — read off disk at runtime, so it has to be copied explicitly.
+COPY --from=builder --chown=wsrapp:wsrapp /app/.build-stamp ./.build-stamp
 
 # data/ holds wsr.db and uploads/ — mount a volume here (see docker-compose.yml) so
 # the database and uploaded files survive container restarts/rebuilds.

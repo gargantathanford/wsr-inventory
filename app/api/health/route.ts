@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDbHealth } from "@/lib/db";
+import { getBuildStamp } from "@/lib/buildStamp";
 
 // Without this, Next pre-renders this handler at build time: the build opens the
 // database, and the Docker HEALTHCHECK gets a frozen "ok" instead of a live DB check.
@@ -19,6 +20,10 @@ export async function GET() {
       subsystems: health.subsystems,
       parts: health.parts,
       time: new Date().toISOString(),
+      // Which build is serving this. A `build.at` earlier than your last pull
+      // means the container is running an old image: `restart` does not
+      // rebuild. See lib/buildStamp.ts.
+      build: getBuildStamp(),
       ...(health.ok
         ? {}
         : {

@@ -535,3 +535,64 @@ describe("mass, through the database", () => {
     assert.match(r.ceiling!.reason, /against a 10\.0 kg budget/);
   });
 });
+
+/**
+ * Withdrawing an endorsement.
+ *
+ * Asked for after an endorsement went in too early during testing. Before
+ * this, the only route back was for the Chief to approve the gate and then
+ * reopen it — which puts a signature in the log that nobody meant, on a gate
+ * nobody believed was closed. The log is the whole point of the gates, so it
+ * cannot be collateral.
+ */
+describe("withdrawing an endorsement", () => {
+  const gate = (id: string) =>
+    store.getReadiness("s_pwt").gates.find((g) => g.gate === id)!;
+
+  beforeEach(() => {
+    seed();
+    store.declarePartListComplete("s_pwt", LEAD, true);
+  });
+
+  test("the person who endorsed can take it back, and the gate reopens", () => {
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    assert.equal(gate("SCOPED").state, "ENDORSED");
+
+    const res = store.withdrawEndorsement("s_pwt", "SCOPED", LEAD);
+    assert.equal(res.ok, true, (res as any).reason);
+
+    const after = gate("SCOPED");
+    assert.notEqual(after.state, "ENDORSED");
+    assert.equal(after.endorsedBy, null, "the endorsement is gone, not merely overridden");
+  });
+
+  test("an approver can withdraw somebody else's endorsement", () => {
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    const res = store.withdrawEndorsement("s_pwt", "SCOPED", CHIEF);
+    assert.equal(res.ok, true, (res as any).reason);
+    assert.notEqual(gate("SCOPED").state, "ENDORSED");
+  });
+
+  test("a bystander cannot", () => {
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    const res = store.withdrawEndorsement("s_pwt", "SCOPED", MEMBER);
+    assert.equal(res.ok, false);
+    assert.equal(gate("SCOPED").state, "ENDORSED");
+  });
+
+  test("once approved it is reopened, not withdrawn, and the message says so", () => {
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    store.approveGate("s_pwt", "SCOPED", CHIEF, null);
+
+    const res = store.withdrawEndorsement("s_pwt", "SCOPED", CHIEF);
+    assert.equal(res.ok, false);
+    assert.match((res as any).reason, /Reopen it instead/);
+    assert.equal(gate("SCOPED").state, "PASSED", "the refusal changed nothing");
+  });
+
+  test("nothing to withdraw is said plainly", () => {
+    const res = store.withdrawEndorsement("s_pwt", "SCOPED", CHIEF);
+    assert.equal(res.ok, false);
+    assert.match((res as any).reason, /has not been endorsed/);
+  });
+});

@@ -323,10 +323,15 @@ failed and `-layout` was probably missing.
 ## 10. Start it
 
 ```bash
-docker compose up -d --build app
+BUILD_REF=$(git rev-parse --short HEAD) docker compose up -d --build app
 docker compose ps
 curl -i localhost:3000/api/health
 ```
+
+`BUILD_REF` is optional and worth the keystrokes. It stamps the commit into
+the image, and `/api/health` reports it back as `build`, so the question "am I
+running the code I just pulled?" is answerable instead of arguable. See
+section 15a.
 
 **Expect** `running (healthy)` and a health body with counts:
 
@@ -510,6 +515,36 @@ docker kill $(docker compose ps -q app) && docker compose up -d app   # ungracef
 
 Reload the browser after each. The part survives all four, or something is
 wrong.
+
+## 13a. "I pulled, but the new thing isn't there"
+
+Almost always a stale image, and it is silent — no error, no log line, just an
+app that is missing a feature you can see in the source on disk.
+
+`docker compose restart app` restarts the **container**. The container runs the
+**image**, and the image was built from whatever the working tree held at build
+time. `git pull` does not touch it. Only `--build` does.
+
+```bash
+curl -s localhost:3000/api/health | python3 -m json.tool | grep -A3 '"build"'
+git rev-parse --short HEAD
+```
+
+If `build.at` is older than when you pulled — or `build.ref` is not the commit
+you are on — you are looking at an old app. Rebuild:
+
+```bash
+BUILD_REF=$(git rev-parse --short HEAD) docker compose up -d --build app
+```
+
+`build.ref` reads `unknown` for an image built without the arg, and `dev` under
+`npm run dev`, which compiles from the working tree and cannot go stale.
+
+The exception is `scripts/` and `lib/` under the `maint`, `backup` and
+`restore` services: those are bind-mounted from the host deliberately, so
+migrations pick up a `git pull` with no rebuild. `app` is not bind-mounted —
+mounting source into the running app would mean shipping an unbuilt tree to
+the VM.
 
 ## 14. Schedule backups on the VM
 
