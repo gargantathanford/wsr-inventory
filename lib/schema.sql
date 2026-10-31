@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS subsystems (
   -- Three-letter code matching the parts-workbook tab (AER, BRK, CHS, ...).
   -- The spreadsheet import joins on this, not on the English name, so a tab can
   -- be renamed on either side without breaking the mapping.
+  -- What SCOPED asserts: a lead has declared the part list complete. Stored
+  -- rather than inferred, because no count can tell you a list is finished.
+  part_list_declared_complete INTEGER NOT NULL DEFAULT 0,
   code TEXT,
   -- Share of the vehicle mass and build budget allocated to this subsystem,
   -- as a fraction (0.26 = 26%). Set by the Chief Engineer; mirrors the
@@ -635,6 +638,12 @@ CREATE TABLE IF NOT EXISTS interfaces (
   owner_name TEXT,                          -- unresolved owner text from the sheet
   due_date TEXT,
   status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','IN_WORK','AGREED','CLOSED')),
+  -- Both-sides agreement. A single status column let ONE lead set AGREED
+  -- alone, which is the exact failure the interfaces gate exists to catch.
+  agreed_by_a TEXT REFERENCES users(id),
+  agreed_a_at TEXT,
+  agreed_by_b TEXT REFERENCES users(id),
+  agreed_b_at TEXT,
   notes TEXT,
   links TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -657,3 +666,60 @@ CREATE INDEX IF NOT EXISTS idx_tasks_subsystem ON tasks(subsystem_id);
 CREATE INDEX IF NOT EXISTS idx_pr_status ON purchase_requests(status);
 CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
 CREATE INDEX IF NOT EXISTS idx_calendar_deadline ON calendar_events(deadline_date);
+
+-- ---------------------------------------------------------------------------
+-- Gate sign-offs: the record behind every completeness percentage.
+--
+-- One row per subsystem per gate. Absence of a row means the gate has not been
+-- endorsed; it is NOT the same as a gate that failed, which is why there is no
+-- 'OPEN' decision stored here. Open, ready and blocked are DERIVED from the
+-- part data every time the page renders, so they cannot go stale in a table.
+--
+-- endorsed_* is the subsystem lead; approved_* is the Chief Engineer or an
+-- Admin. A row with endorsed_by and no approved_by is a gate waiting on the
+-- Chief, and counts for nothing in the percentage.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS subsystem_gates (
+  id TEXT PRIMARY KEY,
+  subsystem_id TEXT NOT NULL REFERENCES subsystems(id) ON DELETE CASCADE,
+  gate TEXT NOT NULL CHECK (gate IN (
+    'SCOPED','DESIGN_FROZEN','RULES_CHECKED','INTERFACES_AGREED',
+    'PROCURED','MANUFACTURED','INSTALLED','TESTED'
+  )),
+  decision TEXT NOT NULL CHECK (decision IN ('PASSED','NOT_APPLICABLE')),
+  reason TEXT,
+  endorsed_by TEXT REFERENCES users(id),
+  endorsed_at TEXT,
+  approved_by TEXT REFERENCES users(id),
+  approved_at TEXT,
+  -- Evidence for the gates that require it. A document row, not free text:
+  -- "we tested it" in a notes field is not evidence.
+  evidence_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+  evidence_note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- One decision per gate per subsystem. Re-deciding UPDATEs this row and the
+  -- history lives in subsystem_gate_log, so the current state is never
+  -- ambiguous and the audit trail is never lost.
+  UNIQUE (subsystem_id, gate)
+);
+CREATE INDEX IF NOT EXISTS idx_subsystem_gates_subsystem ON subsystem_gates(subsystem_id);
+
+-- Append-only history. Same reasoning as xp_events: a number people are judged
+-- on needs a trail that cannot be edited into agreeing with the present.
+CREATE TABLE IF NOT EXISTS subsystem_gate_log (
+  id TEXT PRIMARY KEY,
+  subsystem_id TEXT NOT NULL REFERENCES subsystems(id) ON DELETE CASCADE,
+  gate TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('ENDORSED','APPROVED','REOPENED','MARKED_NA','BACK_IN_SCOPE')),
+  actor_id TEXT NOT NULL REFERENCES users(id),
+  note TEXT,
+  at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_gate_log_subsystem ON subsystem_gate_log(subsystem_id, at);
+
+-- NOTE: columns for an EXISTING database are added by
+-- scripts/migrate-readiness.ts. Nothing in this file may be an ALTER TABLE:
+-- lib/db.ts exec's this whole file on every connection, so an ALTER here fails
+-- with "duplicate column name" on the second boot and takes the app down.
+-- New columns go inline in the CREATE TABLE above AND in the migration.

@@ -37,6 +37,7 @@ export type GateId =
   | "SCOPED"
   | "DESIGN_FROZEN"
   | "RULES_CHECKED"
+  | "INTERFACES_AGREED"
   | "PROCURED"
   | "MANUFACTURED"
   | "INSTALLED"
@@ -63,6 +64,26 @@ export interface SubsystemFacts {
   parts: PartFacts[];
   /** Subsystem-level test records with evidence attached. */
   testsWithEvidence: number;
+  /**
+   * Every interface this subsystem is a party to, on either side.
+   *
+   * An interface is where two subsystems meet, which means nobody owns it
+   * alone — and that is exactly why it is where FSAE cars fail at assembly.
+   * A subsystem can close every other gate and still not bolt to anything.
+   */
+  interfaces: InterfaceFacts[];
+}
+
+export interface InterfaceFacts {
+  ref: string;
+  /** P1 is a critical interface: the car does not go together without it. */
+  priority: "P1" | "P2" | "P3";
+  /** OPEN | IN_WORK | AGREED | CLOSED */
+  status: string;
+  /** Agreed by BOTH subsystem leads. One side agreeing alone is not agreement. */
+  agreedBothSides: boolean;
+  /** The other subsystem's name, for the message. */
+  counterpart: string;
 }
 
 export interface PartFacts {
@@ -176,6 +197,25 @@ export const GATES: GateDef[] = [
       // The derived signal is only that the work has begun; the lead decides
       // whether the coverage is honest. Hence requiresEvidence.
       return parts.some((p) => p.citationCount > 0) ? "satisfied" : "unsatisfied";
+    }
+  },
+  {
+    id: "INTERFACES_AGREED",
+    label: "Interfaces agreed",
+    means:
+      "Every place this subsystem meets another one is written down and agreed by BOTH leads — " +
+      "what bolts to what, with which fasteners, to what tolerance, carrying what load. " +
+      "This is the gate that stops two subsystems each assuming the other owns the joint.",
+    after: ["DESIGN_FROZEN"],
+    weight: 1,
+    requiresEvidence: true,
+    derive: (f) => {
+      if (f.interfaces.length === 0) return "nothing-to-judge";
+      // One side ticking AGREED is not agreement. The whole failure mode this
+      // gate addresses is each team believing the other has it covered.
+      return f.interfaces.every((i) => i.agreedBothSides && (i.status === "AGREED" || i.status === "CLOSED"))
+        ? "satisfied"
+        : "unsatisfied";
     }
   },
   {
@@ -430,6 +470,8 @@ function nothingToJudge(def: GateDef, f: SubsystemFacts): string {
       return "Nothing in this subsystem is made in-house — mark out of scope if everything is bought";
     case "INSTALLED":
       return "No parts here are fitted to the car — mark out of scope if these are spares or consumables";
+    case "INTERFACES_AGREED":
+      return "No interfaces recorded for this subsystem — add them, or mark out of scope if it genuinely touches nothing";
     default:
       return "Needs a lead to assess and sign off";
   }
@@ -464,12 +506,48 @@ function explainOpen(def: GateDef, f: SubsystemFacts): string {
     }
     case "TESTED":
       return "No test record with evidence yet";
+    case "INTERFACES_AGREED": {
+      const open = f.interfaces.filter(
+        (i) => !i.agreedBothSides || (i.status !== "AGREED" && i.status !== "CLOSED")
+      );
+      const p1 = open.filter((i) => i.priority === "P1");
+      const withNames = open.slice(0, 3).map((i) => `${i.ref} with ${i.counterpart}`).join(", ");
+      return (
+        `${open.length} of ${f.interfaces.length} interfaces not agreed by both sides` +
+        (p1.length ? ` — ${p1.length} critical` : "") +
+        (withNames ? `: ${withNames}${open.length > 3 ? ", …" : ""}` : "")
+      );
+    }
   }
 }
 
+/**
+ * A cap on the percentage, regardless of how many gates are closed.
+ *
+ * Ported from the Freeze Readiness tool, where it is the better instrument: a
+ * subsystem with one unresolved critical problem and everything else perfect
+ * should NOT read 97%. Subtracting points pretends to quantify how unfinished
+ * something is; a ceiling says plainly "you cannot call this finished", and
+ * says why.
+ *
+ * Ceilings are not cumulative. The lowest applicable cap wins, and the UI names
+ * the one that binds — two caps stacking into a number nobody can derive is the
+ * thing being avoided.
+ */
+export interface Ceiling {
+  /** The highest percentage this subsystem may report. */
+  cap: number;
+  /** Shown verbatim next to the number. */
+  reason: string;
+}
+
 export interface Readiness {
-  /** Weighted percentage of applicable gates passed. 0-100, integer. */
+  /** Percentage after any ceiling is applied. This is the number to display. */
   pct: number;
+  /** What the gates alone would say. Shown only to explain a binding ceiling. */
+  gatePct: number;
+  /** The cap in force, or null when gates alone decide. */
+  ceiling: Ceiling | null;
   passed: number;
   applicable: number;
   /** The gate a lead should look at next, or null when everything has passed. */
@@ -490,14 +568,49 @@ export interface Readiness {
  * counting it would reintroduce exactly the thing being fixed: a number that
  * says finished when nobody has checked.
  */
-export function rollUp(gates: GateStatus[]): Readiness {
+/**
+ * Every ceiling rule, lowest cap first.
+ *
+ * Starting with one rule rather than the artifact's five, because each cap is a
+ * claim about what "not finished" means and an unexamined cap is worse than
+ * none. P1 interfaces first: it is the one the gates genuinely cannot express,
+ * since an interface is shared and a gate is per-subsystem.
+ */
+export const CEILINGS: Array<{ cap: number; test: (f: SubsystemFacts) => string | null }> = [
+  {
+    cap: 84,
+    test: (f) => {
+      const open = f.interfaces.filter(
+        (i) => i.priority === "P1" && !(i.agreedBothSides && (i.status === "AGREED" || i.status === "CLOSED"))
+      );
+      if (open.length === 0) return null;
+      const names = open.slice(0, 2).map((i) => `${i.ref} with ${i.counterpart}`).join(", ");
+      return (
+        `${open.length} critical interface${open.length === 1 ? "" : "s"} not agreed by both sides ` +
+        `(${names}${open.length > 2 ? ", …" : ""}). A subsystem that does not yet bolt to the car ` +
+        `cannot read complete, however much of its own work is done.`
+      );
+    }
+  }
+];
+
+function lowestCeiling(f: SubsystemFacts): Ceiling | null {
+  let best: Ceiling | null = null;
+  for (const c of CEILINGS) {
+    const reason = c.test(f);
+    if (reason !== null && (best === null || c.cap < best.cap)) best = { cap: c.cap, reason };
+  }
+  return best;
+}
+
+export function rollUp(facts: SubsystemFacts, gates: GateStatus[]): Readiness {
   const applicable = gates.filter((g) => g.state !== "NOT_APPLICABLE");
   const totalWeight = applicable.reduce((s, g) => s + g.weight, 0);
   const passedWeight = applicable.filter((g) => g.state === "PASSED").reduce((s, g) => s + g.weight, 0);
 
   // Every gate out of scope is a defensible 100% — the alternative is dividing
   // by zero or inventing a number.
-  const pct = totalWeight === 0 ? 100 : Math.round((passedWeight / totalWeight) * 100);
+  const gatePct = totalWeight === 0 ? 100 : Math.round((passedWeight / totalWeight) * 100);
 
   const stale = applicable.filter((g) => g.stale);
 
@@ -511,8 +624,12 @@ export function rollUp(gates: GateStatus[]): Readiness {
     applicable.find((g) => g.state === "BLOCKED") ??
     null;
 
+  const ceiling = lowestCeiling(facts);
+
   return {
-    pct,
+    pct: ceiling ? Math.min(gatePct, ceiling.cap) : gatePct,
+    gatePct,
+    ceiling: ceiling && ceiling.cap < gatePct ? ceiling : null,
     passed: applicable.filter((g) => g.state === "PASSED").length,
     applicable: applicable.length,
     next,
@@ -523,7 +640,7 @@ export function rollUp(gates: GateStatus[]): Readiness {
 
 /** Everything in one call, for the common case. */
 export function readinessFor(facts: SubsystemFacts, signOffs: GateSignOff[]): Readiness {
-  return rollUp(evaluateGates(facts, signOffs));
+  return rollUp(facts, evaluateGates(facts, signOffs));
 }
 
 /* -------------------------------------------------------------------------

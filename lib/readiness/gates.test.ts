@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import {
   evaluateGates, readinessFor, rollUp, GATES,
   endorseProblem, approveProblem, notApplicableProblem, isApprover,
-  type SubsystemFacts, type GateSignOff, type PartFacts
+  type SubsystemFacts, type GateSignOff, type PartFacts, type InterfaceFacts
 } from "./gates";
 
 function part(over: Partial<PartFacts> = {}): PartFacts {
@@ -23,7 +23,12 @@ function part(over: Partial<PartFacts> = {}): PartFacts {
 }
 
 function facts(over: Partial<SubsystemFacts> = {}): SubsystemFacts {
-  return { partListDeclaredComplete: false, parts: [], testsWithEvidence: 0, ...over };
+  return { partListDeclaredComplete: false, parts: [], testsWithEvidence: 0, interfaces: [], ...over };
+}
+
+/** An interface agreed by both leads and closed out. */
+function iface(over: Partial<InterfaceFacts> = {}): InterfaceFacts {
+  return { ref: "CHS_PWT_001", priority: "P2", status: "AGREED", agreedBothSides: true, counterpart: "Chassis", ...over };
 }
 
 /** Fully approved: lead endorsed, Chief approved. */
@@ -184,7 +189,7 @@ describe("NOT_APPLICABLE leaves the denominator and does not block", () => {
     );
     const r = readinessFor(facts({ partListDeclaredComplete: true, parts: [part()] }), all);
     assert.equal(r.pct, 100);
-    assert.equal(r.applicable, 6, "the excluded gate is out of the denominator");
+    assert.equal(r.applicable, GATES.length - 1, "the excluded gate is out of the denominator");
   });
 
   test("an out-of-scope prerequisite does NOT block what comes after it", () => {
@@ -300,8 +305,14 @@ describe("next gate points a lead at one thing", () => {
 
 describe("the weighting is monotonic", () => {
   test("passing one more gate never lowers the percentage", () => {
-    const f = facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })] });
-    const order = ["SCOPED", "DESIGN_FROZEN", "RULES_CHECKED", "PROCURED", "MANUFACTURED", "INSTALLED", "TESTED"] as const;
+    const f = facts({
+      partListDeclaredComplete: true,
+      parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })],
+      interfaces: [iface()]
+    });
+    // Derived from GATES, not a hardcoded list, so adding a gate cannot make
+    // this test quietly assert the wrong total.
+    const order = GATES.map((g) => g.id);
     let last = -1;
     for (let i = 0; i <= order.length; i++) {
       const pct = readinessFor(f, order.slice(0, i).map((g) => signed(g))).pct;
@@ -311,10 +322,8 @@ describe("the weighting is monotonic", () => {
     assert.equal(last, 100);
   });
 
-  test("TESTED is the heaviest single gate", () => {
-    const weights = GATES.map((g) => g.weight);
-    const tested = GATES.find((g) => g.id === "TESTED")!.weight;
-    assert.equal(tested, Math.max(...weights), "proving it works is worth more than buying it");
+  test("weights are flat, so no gate outranks another", () => {
+    assert.deepEqual([...new Set(GATES.map((g) => g.weight))], [1]);
   });
 });
 
@@ -569,13 +578,130 @@ describe("flat weights", () => {
     assert.deepEqual([...new Set(GATES.map((g) => g.weight))], [1]);
   });
 
-  test("five of seven closed reads 71%", () => {
+  test("gates closed and percent agree, because the weights are flat", () => {
     const f = facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", status: "INSTALLED" })] });
     const r = readinessFor(f, [
       signed("SCOPED"), signed("DESIGN_FROZEN"), signed("RULES_CHECKED"), signed("PROCURED"), signed("MANUFACTURED")
     ]);
     assert.equal(r.passed, 5);
-    assert.equal(r.applicable, 7);
-    assert.equal(r.pct, 71);
+    assert.equal(r.applicable, GATES.length);
+    assert.equal(r.pct, Math.round((5 / GATES.length) * 100));
+  });
+});
+
+describe("interfaces gate — the joint nobody owns", () => {
+  test("one side agreeing is not agreement", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN" })],
+        interfaces: [iface({ status: "AGREED", agreedBothSides: false })]
+      }),
+      [signed("SCOPED"), signed("DESIGN_FROZEN")]
+    );
+    const g = gs.find((x) => x.gate === "INTERFACES_AGREED")!;
+    assert.equal(g.state, "OPEN", "AGREED set by one lead must not close the gate");
+    assert.match(g.detail, /not agreed by both sides/);
+  });
+
+  test("both sides agreeing makes it ready", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN" })],
+        interfaces: [iface({ status: "AGREED", agreedBothSides: true })]
+      }),
+      [signed("SCOPED"), signed("DESIGN_FROZEN")]
+    );
+    assert.equal(gs.find((x) => x.gate === "INTERFACES_AGREED")!.state, "READY");
+  });
+
+  test("the detail names the counterpart subsystem and flags critical ones", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN" })],
+        interfaces: [
+          iface({ ref: "CHS_PWT_001", priority: "P1", status: "OPEN", agreedBothSides: false, counterpart: "Chassis" })
+        ]
+      }),
+      [signed("SCOPED"), signed("DESIGN_FROZEN")]
+    );
+    const d = gs.find((x) => x.gate === "INTERFACES_AGREED")!.detail;
+    assert.match(d, /1 critical/);
+    assert.match(d, /CHS_PWT_001 with Chassis/);
+  });
+
+  test("no interfaces recorded names the two real actions", () => {
+    const gs = evaluateGates(
+      facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN" })] }),
+      [signed("SCOPED"), signed("DESIGN_FROZEN")]
+    );
+    const d = gs.find((x) => x.gate === "INTERFACES_AGREED")!.detail;
+    assert.match(d, /add them, or mark out of scope/);
+  });
+});
+
+describe("the P1 ceiling", () => {
+  /** Everything closed except that one critical interface is still open. */
+  function nearlyDone(interfaces: InterfaceFacts[]) {
+    return readinessFor(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN", status: "INSTALLED", citationCount: 1 })],
+        testsWithEvidence: 1,
+        interfaces
+      }),
+      GATES.map((g) => (g.id === "MANUFACTURED" ? na("MANUFACTURED", "all bought") : signed(g.id)))
+    );
+  }
+
+  test("an open P1 interface caps the subsystem at 84, not 100", () => {
+    const r = nearlyDone([iface({ ref: "CHS_PWT_001", priority: "P1", status: "OPEN", agreedBothSides: false })]);
+    assert.equal(r.gatePct, 100, "the gates themselves are all closed");
+    assert.equal(r.pct, 84, "but it does not bolt to the car yet");
+    assert.ok(r.ceiling);
+    assert.match(r.ceiling!.reason, /1 critical interface not agreed by both sides/);
+    assert.match(r.ceiling!.reason, /cannot read complete/);
+  });
+
+  test("a P2 interface left open does NOT cap — only critical ones do", () => {
+    const r = nearlyDone([iface({ priority: "P2", status: "OPEN", agreedBothSides: false })]);
+    assert.equal(r.ceiling, null);
+  });
+
+  test("agreeing the P1 lifts the cap", () => {
+    const r = nearlyDone([iface({ priority: "P1", status: "AGREED", agreedBothSides: true })]);
+    assert.equal(r.pct, 100);
+    assert.equal(r.ceiling, null);
+  });
+
+  test("a P1 agreed by only one side still caps", () => {
+    const r = nearlyDone([iface({ priority: "P1", status: "AGREED", agreedBothSides: false })]);
+    assert.equal(r.pct, 84);
+  });
+
+  test("the ceiling is not reported when the gates are already below it", () => {
+    // Reporting a cap of 84 on a subsystem sitting at 25% is noise — the
+    // ceiling only matters once it actually binds.
+    const r = readinessFor(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part()],
+        interfaces: [iface({ priority: "P1", status: "OPEN", agreedBothSides: false })]
+      }),
+      [signed("SCOPED")]
+    );
+    assert.ok(r.pct < 84);
+    assert.equal(r.ceiling, null, "shown only when it changes the answer");
+  });
+
+  test("the ceiling applies even with several P1s open, naming the count", () => {
+    const r = nearlyDone([
+      iface({ ref: "CHS_PWT_001", priority: "P1", status: "OPEN", agreedBothSides: false }),
+      iface({ ref: "CHS_SUS_002", priority: "P1", status: "OPEN", agreedBothSides: false, counterpart: "Suspension" })
+    ]);
+    assert.equal(r.pct, 84);
+    assert.match(r.ceiling!.reason, /2 critical interfaces/);
   });
 });
