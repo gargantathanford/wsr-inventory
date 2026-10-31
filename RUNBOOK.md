@@ -72,27 +72,27 @@ overrode the entrypoint.
 
 This step is not optional. Steps 4 and 5 change the schema.
 
-## 3a. Rebuild the maintenance image — before any migration
-
-**Do this before step 4.** The `maint`, `backup` and `restore` services have no
-bind mount: they run the scripts baked into the image at build time. If your
-image predates the branch you just checked out, the new scripts are simply not
-in there, and you get:
-
-```
-Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/scripts/<name>.ts'
-```
-
-That is not a broken script. It is an image older than the code.
+## 3a. Build the maintenance image — once
 
 ```bash
 docker compose build maint
 ```
 
-Takes a few minutes the first time and is mostly cached afterwards. The `app`
-build in step 10 reuses these layers, so this costs almost nothing overall.
+Needed the first time, and after any change to `package.json` or the
+Dockerfile. **Not** after an ordinary `git pull`: `maint`, `backup` and
+`restore` bind-mount `./scripts` and `./lib` read-only from the working tree,
+so a pulled script runs immediately.
 
-Rebuild again any time you check out a branch that adds or changes a script.
+That mount exists because the previous arrangement bit twice, both times with:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/scripts/<name>.ts'
+```
+
+which reads as a broken script and is actually an image older than the code.
+
+The `app` service deliberately does NOT get that mount — it runs the built
+output and is rebuilt with `--build`.
 
 ## 3b. Write down what is in there now
 
@@ -321,6 +321,24 @@ if step 9 ran, and the XP and security tables should no longer read `-`.
 - `"db":"empty"` with HTTP 503 means the app is on a volume with no users —
   back to step 2.
 - No counts at all means an old image is still running; rebuild.
+
+## 10a. If the app shows "a server-side exception has occurred"
+
+A digest and nothing else means a MIGRATION is outstanding, nine times in ten.
+
+```bash
+docker compose logs app --tail 40
+```
+
+The log now opens with a block naming the exact script to run. `schema.sql`
+creates new TABLES on boot but cannot add a COLUMN to a table that already
+exists, so the app can start with every table present and still throw on the
+first page that selects a missing column.
+
+`curl -s localhost:3000/api/health` reports the same thing as
+`migrationsPending`, and `"ok"` is false while any migration is outstanding.
+
+Your data is not affected by this. Run the named migration and restart.
 
 ## 11. Log in
 

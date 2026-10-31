@@ -92,6 +92,8 @@ services:
     volumes:
       - wsr-data:/app/data
       - ./backups:/app/backups
+      - ./scripts:/app/scripts:ro
+      - ./lib:/app/lib:ro
 
   # One-off, app STOPPED: `docker compose stop app` first, then
   #   docker compose run --rm restore              # lists timestamps
@@ -110,6 +112,8 @@ services:
     volumes:
       - wsr-data:/app/data
       - ./backups:/app/backups
+      - ./scripts:/app/scripts:ro
+      - ./lib:/app/lib:ro
 
   # One-off maintenance shell with devDependencies available (tsx), sharing the
   # app's data volume and the host ./backups folder.
@@ -125,6 +129,22 @@ services:
     volumes:
       - wsr-data:/app/data
       - ./backups:/app/backups
+      # scripts/ and lib/ are bind-mounted READ-ONLY from the working tree.
+      #
+      # Without this, every maintenance command runs the copy baked into the
+      # image, so a `git pull` that adds or changes a script does nothing until
+      # somebody remembers `docker compose build maint`. That has now bitten
+      # twice, both times with the same unhelpful error:
+      #   Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/scripts/x.ts'
+      # which reads as a broken script rather than a stale image.
+      #
+      # lib/ comes too because scripts import from it (password hashing, the XP
+      # store) and read lib/schema.sql at runtime — a half-updated pair is worse
+      # than neither. Read-only: these containers must never write back into the
+      # repo.
+      - ./scripts:/app/scripts:ro
+      - ./lib:/app/lib:ro
+
 
 volumes:
   wsr-data:

@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { findMigrationGaps, describeGaps } from "./migrationCheck";
 
 const DB_PATH = path.join(process.cwd(), "data", "wsr.db");
 const SCHEMA_PATH = path.join(process.cwd(), "lib", "schema.sql");
@@ -43,6 +44,18 @@ function createConnection(): Database.Database {
   db.pragma("foreign_keys = ON");
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   db.exec(schema);
+
+  // Shout at boot, once, if a migration is outstanding. The alternative is
+  // what actually happened: the app starts cleanly, every page that touches a
+  // missing column answers with an unreadable digest, and the obvious reading
+  // is that the migration destroyed the data.
+  const gaps = findMigrationGaps(db);
+  if (gaps.length > 0) {
+    console.error("\n" + "=".repeat(72));
+    console.error(describeGaps(gaps));
+    console.error("=".repeat(72) + "\n");
+  }
+
   return db;
 }
 
@@ -52,17 +65,30 @@ function createConnection(): Database.Database {
  * user count is the cheapest signal that distinguishes "running" from
  * "running against the wrong volume".
  */
-export function getDbHealth(): { ok: boolean; users: number; subsystems: number; parts: number } {
+export function getDbHealth(): {
+  ok: boolean;
+  users: number;
+  subsystems: number;
+  parts: number;
+  migrationsPending?: Array<{ script: string; missing: string[] }>;
+} {
   const db = getDb();
   const one = (sql: string): number => (db.prepare(sql).get() as { c: number }).c;
   const users = one(`SELECT COUNT(*) c FROM users`);
+
+  // A half-migrated database is not healthy either, and it is far more
+  // confusing than an empty one: the app boots, the tables are all there, and
+  // the first page that touches a missing COLUMN throws an opaque digest.
+  const gaps = findMigrationGaps(db);
+
   return {
     // Zero users means nobody can sign in. That is not healthy, whatever
     // SELECT 1 says, so the endpoint reports it as a failure.
-    ok: users > 0,
+    ok: users > 0 && gaps.length === 0,
     users,
     subsystems: one(`SELECT COUNT(*) c FROM subsystems`),
-    parts: one(`SELECT COUNT(*) c FROM parts`)
+    parts: one(`SELECT COUNT(*) c FROM parts`),
+    ...(gaps.length ? { migrationsPending: gaps } : {})
   };
 }
 
