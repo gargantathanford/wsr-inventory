@@ -395,3 +395,40 @@ describe("staleness survives the round trip", () => {
     assert.equal(r.next!.gate, "DESIGN_FROZEN", "the disagreement is the next thing to look at");
   });
 });
+
+describe("the interface register end to end", () => {
+  test("raising one, then both leads agreeing, lifts the ceiling", () => {
+    addInterface("PWT_CHS_001", "P1", "s_pwt", "s_chs");
+
+    // Before: both subsystems are capped by the shared joint.
+    assert.ok(store.getReadiness("s_pwt").pct <= 84);
+    assert.ok(store.getReadiness("s_chs").pct <= 84);
+
+    store.agreeInterface("PWT_CHS_001", LEAD);
+    const half = store.getReadiness("s_pwt");
+    assert.ok(half.pct <= 84, "one signature is not agreement");
+
+    store.agreeInterface("PWT_CHS_001", OTHER_LEAD);
+    assert.equal(store.getReadiness("s_pwt").ceiling, null);
+    assert.equal(store.getReadiness("s_chs").ceiling, null);
+  });
+
+  test("a Chief can sign the outstanding side when a subsystem has no lead", () => {
+    addInterface("PWT_CHS_002", "P2", "s_pwt", "s_chs");
+    assert.equal(store.agreeInterface("PWT_CHS_002", LEAD).ok, true);
+    // The Chief takes whichever side is still outstanding.
+    assert.equal(store.agreeInterface("PWT_CHS_002", CHIEF).ok, true);
+    const db = new Database(DB_FILE, { readonly: true });
+    const row = db.prepare(`SELECT status, agreed_by_a, agreed_by_b FROM interfaces WHERE interface_ref='PWT_CHS_002'`).get() as any;
+    db.close();
+    assert.equal(row.status, "AGREED");
+    assert.notEqual(row.agreed_by_a, row.agreed_by_b, "two different people signed");
+  });
+
+  test("a team member cannot agree anything", () => {
+    addInterface("PWT_CHS_003", "P2", "s_pwt", "s_chs");
+    const res = store.agreeInterface("PWT_CHS_003", { id: "u_member", role: "TEAM_MEMBER" });
+    assert.equal(res.ok, false);
+    assert.match((res as any).reason, /leads of the two subsystems/);
+  });
+});

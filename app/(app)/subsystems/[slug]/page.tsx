@@ -15,6 +15,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { GatePanel } from "@/components/readiness/GatePanel";
 import { getReadiness } from "@/lib/readiness/store";
+import { getInterfacesFor } from "@/lib/interfaces";
 import { getSession } from "@/lib/auth";
 
 export default async function SubsystemDetailPage({ params }: { params: { slug: string } }) {
@@ -32,6 +33,7 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
   // above but it is PROCUREMENT progress and is labelled as such — presenting
   // it as "completion" is the bug this release fixes.
   const readiness = getReadiness(subsystem.id);
+  const subsystemInterfaces = getInterfacesFor(subsystem.id);
   const user = await getSession();
   const isLead = members.some((m: any) => m.user_id === user?.id && m.role_in_subsystem === "LEADER");
   const canApprove = user?.role === "ADMIN" || user?.role === "CHIEF_ENGINEER";
@@ -95,6 +97,48 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
           </div>
         </div>
       </div>
+
+      {/* Shown next to the gates, because "Interfaces agreed" is the gate most
+          likely to be blocked by somebody else and the lead needs to see WHO
+          they are waiting on without going hunting. */}
+      {subsystemInterfaces.length > 0 && (
+        <section className="panel p-6">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-medium text-graphite-200">Interfaces</h2>
+            <Link href="/interfaces" className="font-mono text-[11px] text-signal hover:text-signal-bright">
+              FULL REGISTER →
+            </Link>
+          </div>
+          <ul className="space-y-1.5">
+            {subsystemInterfaces.map((i) => {
+              const both = !!i.agreed_by_a && !!i.agreed_by_b;
+              const other = i.subsystem_a_id === subsystem.id ? i.subsystem_b_name : i.subsystem_a_name;
+              return (
+                <li key={i.id} className="flex items-start justify-between gap-3 text-xs py-1.5">
+                  <span className="min-w-0">
+                    <span className="font-mono text-[11px] text-graphite-500">{i.interface_ref}</span>
+                    <span className="text-graphite-300 ml-2">with {other ?? "an unassigned subsystem"}</span>
+                    {i.description && (
+                      <span className="block text-[11px] text-graphite-500 mt-0.5">{i.description}</span>
+                    )}
+                  </span>
+                  <span
+                    className={`font-mono text-[10px] shrink-0 ${
+                      both
+                        ? "text-telemetry-green"
+                        : i.priority === "P1"
+                          ? "text-telemetry-red"
+                          : "text-telemetry-amber"
+                    }`}
+                  >
+                    {both ? "AGREED" : i.priority === "P1" ? "P1 · NOT AGREED" : "NOT AGREED"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <GatePanel
         subsystemId={subsystem.id}
