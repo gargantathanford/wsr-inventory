@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { StatusBadge, ImportanceBadge } from "@/components/StatusBadge";
 import { TaskCompletionModal } from "@/components/TaskCompletionModal";
 import { TaskReviewPanel } from "@/components/TaskReviewPanel";
+import { formatDateTime, formatDay } from "@/lib/datetime";
 
 export function TaskCard({
   task,
@@ -79,7 +80,7 @@ export function TaskCard({
           <div className="data-label">
             {task.status === "COMPLETED" ? "COMPLETION SUMMARY" : "SUBMITTED FOR REVIEW"}
             {task.submitted_by_name ? ` — ${task.submitted_by_name}` : ""}
-            {task.submitted_at ? ` · ${task.submitted_at.slice(0, 16).replace("T", " ")}` : ""}
+            {task.submitted_at ? ` · ${formatDateTime(task.submitted_at)}` : ""}
           </div>
           <p className="text-sm text-graphite-300 whitespace-pre-line">{task.completion_summary}</p>
           {task.remaining_work && (
@@ -109,7 +110,7 @@ export function TaskCard({
           )}
           {task.status === "COMPLETED" && task.reviewed_by_name && (
             <div className="text-[11px] font-mono text-graphite-500 pt-1 border-t border-graphite-800">
-              Approved by {task.reviewed_by_name} on {task.reviewed_at?.slice(0, 10)}
+              Approved by {task.reviewed_by_name} on {formatDay(task.reviewed_at, "")}
             </div>
           )}
         </div>

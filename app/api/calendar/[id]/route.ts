@@ -49,7 +49,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         { status: 403 }
       );
     }
-    db.prepare(`UPDATE calendar_events SET status = ? WHERE id = ?`).run(body.status, params.id);
+    // Logged because "who started this, and who un-started it" is a question
+    // that gets asked about a deadline that slipped, and the status column
+    // only holds the answer until the next change.
+    db.transaction(() => {
+      db.prepare(`UPDATE calendar_events SET status = ? WHERE id = ?`).run(body.status, params.id);
+      db.prepare(
+        `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details)
+         VALUES (?, ?, 'UPDATE', 'CALENDAR_EVENT', ?, ?)`
+      ).run(
+        newId("log"),
+        user.id,
+        params.id,
+        `"${event.title}" ${event.status} → ${body.status}`
+      );
+    })();
     return NextResponse.json({ ok: true });
   }
 

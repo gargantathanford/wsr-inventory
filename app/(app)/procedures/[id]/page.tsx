@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { DocumentCard } from "@/components/DocumentCard";
 import { DocumentUploadForm } from "@/components/DocumentUploadForm";
 import { ProcedureApprovalPanel, DeleteProcedureButton } from "@/components/ProcedureApprovalPanel";
+import { formatDay } from "@/lib/datetime";
 
 const CATEGORY_LABEL: Record<string, string> = {
   DASHBOARD_USAGE: "Dashboard Usage",
@@ -73,9 +74,9 @@ export default async function ProcedureDetailPage({ params }: { params: { id: st
       <div className="grid sm:grid-cols-2 gap-6 text-sm">
         <Row label="Applicable team(s)" value={proc.subsystem_name || proc.applicable_teams || "All Teams"} />
         <Row label="Author" value={proc.author_name || "—"} />
-        <Row label="Created" value={proc.created_at?.slice(0, 10) || "—"} />
-        <Row label="Last updated" value={proc.updated_at?.slice(0, 10) || "—"} />
-        {proc.approved_by_name && <Row label="Approved by" value={`${proc.approved_by_name} on ${proc.approved_at?.slice(0, 10)}`} />}
+        <Row label="Created" value={formatDay(proc.created_at)} />
+        <Row label="Last updated" value={formatDay(proc.updated_at)} />
+        {proc.approved_by_name && <Row label="Approved by" value={`${proc.approved_by_name} on ${formatDay(proc.approved_at)}`} />}
         {proc.part_name && <Row label="Related part" value={proc.part_name} />}
       </div>
 

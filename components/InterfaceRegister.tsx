@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { InterfaceRow } from "@/lib/interfaces";
+import { formatDay } from "@/lib/datetime";
 
 /**
  * The interface register.
@@ -216,7 +217,7 @@ function SideCard({
         {agreedBy ? (
           <span className="text-telemetry-green">
             agreed by {agreedBy}
-            {at ? ` · ${String(at).slice(0, 10)}` : ""}
+            {at ? ` · ${formatDay(String(at), "")}` : ""}
           </span>
         ) : (
           <span className="text-graphite-500">not agreed</span>

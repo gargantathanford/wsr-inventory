@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { StatusBadge, ImportanceBadge } from "@/components/StatusBadge";
 import { PurchaseRequestActions } from "@/components/PurchaseRequestActions";
+import { formatDateTime, formatDay } from "@/lib/datetime";
 
 export default async function PurchaseRequestDetailPage({ params }: { params: { id: string } }) {
   const db = getDb();
@@ -65,8 +66,8 @@ export default async function PurchaseRequestDetailPage({ params }: { params: { 
         <Row label="Vendor" value={request.vendor || "—"} />
         <Row label="Required by" value={request.required_date || "—"} />
         <Row label="Project association" value={request.project_association || "—"} />
-        <Row label="Submitted" value={request.submitted_at?.slice(0, 16).replace("T", " ") || "Not yet submitted"} />
-        {request.decided_by_name && <Row label="Decided by" value={`${request.decided_by_name} on ${request.decided_at?.slice(0, 10)}`} />}
+        <Row label="Submitted" value={formatDateTime(request.submitted_at, "Not yet submitted")} />
+        {request.decided_by_name && <Row label="Decided by" value={`${request.decided_by_name} on ${formatDay(request.decided_at)}`} />}
       </div>
 
       {request.item_description && (
@@ -121,7 +122,7 @@ export default async function PurchaseRequestDetailPage({ params }: { params: { 
               return (
                 <div key={e.id} className="flex items-baseline gap-3 px-3 py-1.5 text-xs text-graphite-500">
                   <span className="font-mono text-[10px] text-graphite-600 shrink-0">
-                    {e.created_at?.slice(0, 16).replace("T", " ")}
+                    {formatDateTime(e.created_at)}
                   </span>
                   <span>
                     {e.user_name || "System"} moved {e.from_status || "—"} → {e.to_status}
@@ -146,7 +147,7 @@ export default async function PurchaseRequestDetailPage({ params }: { params: { 
                     )}
                   </span>
                   <span className="font-mono text-[11px] text-graphite-500">
-                    {e.created_at?.slice(0, 16).replace("T", " ")}
+                    {formatDateTime(e.created_at)}
                   </span>
                 </div>
                 {e.comment && <p className="text-sm text-graphite-300 mt-2 leading-relaxed">{e.comment}</p>}

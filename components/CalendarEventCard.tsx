@@ -45,14 +45,22 @@ export function CalendarEventCard({
   );
   const overdue = daysRemaining < 0 && event.status !== "COMPLETED";
 
-  async function start() {
+  async function setStatus(status: "UPCOMING" | "IN_PROGRESS") {
     setLoading(true);
-    await fetch(`/api/calendar/${event.id}`, {
+    setError(null);
+    const res = await fetch(`/api/calendar/${event.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "IN_PROGRESS" })
+      body: JSON.stringify({ status })
     });
     setLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      // This used to swallow the response entirely, so a 403 looked like a
+      // button that did nothing.
+      setError(typeof data.error === "string" ? data.error : "Could not change the status.");
+      return;
+    }
     router.refresh();
   }
 
@@ -163,14 +171,26 @@ export function CalendarEventCard({
       )}
 
       {canStart && event.is_actionable && event.status === "UPCOMING" && (
-        <button className="btn-ghost text-xs" disabled={loading} onClick={start}>
+        <button className="btn-ghost text-xs" disabled={loading} onClick={() => setStatus("IN_PROGRESS")}>
           Start
         </button>
       )}
-      {canAct && event.is_actionable && event.status === "IN_PROGRESS" && !showCompletion && (
-        <button className="btn-primary text-xs" onClick={() => setShowCompletion(true)}>
-          Mark complete
-        </button>
+      {event.is_actionable && event.status === "IN_PROGRESS" && !showCompletion && (
+        <div className="flex gap-2 flex-wrap">
+          {canAct && (
+            <button className="btn-primary text-xs" onClick={() => setShowCompletion(true)}>
+              Mark complete
+            </button>
+          )}
+          {/* Started by mistake, or started and then not actually worked on.
+              Without this the only states were "in progress" forever or a
+              fabricated completion summary, and the second one is worse. */}
+          {canStart && (
+            <button className="btn-ghost text-xs" disabled={loading} onClick={() => setStatus("UPCOMING")}>
+              Stop — not started after all
+            </button>
+          )}
+        </div>
       )}
       {showCompletion && (
         <form onSubmit={submitCompletion} className="space-y-2 border-t border-graphite-800 pt-3">

@@ -7,7 +7,9 @@ import {
   getCriticalProcurementItems,
   getBlockingComponents,
   getMissingTools,
+  getDeadlineOverview,
 } from "@/lib/queries";
+import { DeadlineStrip } from "@/components/DeadlineStrip";
 import { statusLabel } from "@/lib/scoring";
 import { StatCard } from "@/components/StatCard";
 import { getReadinessByCode, getVehicleReadiness } from "@/lib/readiness/store";
@@ -28,6 +30,39 @@ export default async function DashboardPage() {
   const criticalItems = getCriticalProcurementItems(5);
   const blocking = getBlockingComponents();
   const missingTools = getMissingTools();
+  const deadlines = getDeadlineOverview(6);
+
+  // Collected before the markup so the panel can say "nothing needs
+  // attention" honestly rather than rendering an empty box with a heading.
+  const alerts: Array<{ label: string; detail: string; href: string; tone: "red" | "amber" }> = [];
+  if (vehicle.stale > 0)
+    alerts.push({
+      label: vehicle.stale === 1 ? "1 closed gate no longer matches the data" : `${vehicle.stale} closed gates no longer match the data`,
+      detail: "Something changed after sign-off. A signature that no longer describes the car is worse than no signature.",
+      href: "/subsystems",
+      tone: "red"
+    });
+  if (missingTools.length > 0)
+    alerts.push({
+      label: `${missingTools.length} required tool${missingTools.length === 1 ? "" : "s"} unavailable`,
+      detail: "Work that needs these is blocked whatever the parts say.",
+      href: "/tools",
+      tone: "red"
+    });
+  if (stats.criticalMissing > 0)
+    alerts.push({
+      label: `${stats.criticalMissing} critical part${stats.criticalMissing === 1 ? "" : "s"} still missing`,
+      detail: "Lead times are the part of this nobody can compress later.",
+      href: "/shopping-list",
+      tone: "amber"
+    });
+  if (vehicle.capped > 0)
+    alerts.push({
+      label: `${vehicle.capped} subsystem${vehicle.capped === 1 ? "" : "s"} capped by an open interface`,
+      detail: "Two subsystems have not agreed on how they meet. Closing gates will not raise the number until they do.",
+      href: "/interfaces",
+      tone: "amber"
+    });
 
   const readinessColor =
     vehicle.pct >= 75 ? "text-telemetry-green" : vehicle.pct >= 45 ? "text-telemetry-amber" : "text-telemetry-red";
@@ -42,6 +77,60 @@ export default async function DashboardPage() {
           {user?.name.split(" ")[0]}, here is where the build stands.
         </h1>
       </div>
+
+      {/* Dates and problems come before the score. The readiness number is
+          something you check weekly; a deadline is something you act on
+          today, and it used to sit four clicks away on the events page. */}
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <DeadlineStrip deadlines={deadlines} />
+        </div>
+        <section className="panel p-6">
+          <h2 className="text-sm font-medium text-graphite-200">Needs attention</h2>
+          {alerts.length === 0 ? (
+            <p className="text-xs text-graphite-500 mt-2 leading-relaxed">
+              Nothing flagged. No stale sign-offs, no missing tools, no critical parts outstanding.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-2.5">
+              {alerts.map((a) => (
+                <li key={a.label}>
+                  <Link href={a.href} className="block group">
+                    <span
+                      className={`block text-xs ${a.tone === "red" ? "text-telemetry-red" : "text-telemetry-amber"} group-hover:underline`}
+                    >
+                      {a.label}
+                    </span>
+                    <span className="block text-[11px] text-graphite-500 mt-0.5 leading-relaxed">{a.detail}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {missingTools.length > 0 && (
+        <div className="border border-telemetry-red/40 bg-telemetry-red/5 rounded-md p-4">
+          <div className="flex items-center gap-2 text-telemetry-red font-mono text-xs tracking-wide">
+            WARNING — REQUIRED TOOLS UNAVAILABLE
+          </div>
+          <div className="mt-2 grid sm:grid-cols-2 gap-2">
+            {missingTools.map((t) => (
+              <Link
+                key={t.id}
+                href={`/tools/${t.id}`}
+                className="text-sm flex items-center justify-between rounded-sm border border-graphite-700 px-3 py-2 hover:border-telemetry-red/50"
+              >
+                <span className="text-graphite-100">{t.tool_name}</span>
+                <span className="font-mono text-xs text-graphite-500">
+                  {t.subsystem_names || "Unassigned"}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Project readiness hero */}
       <div className="panel p-6 md:p-8 flex flex-col md:flex-row md:items-center gap-8">
@@ -71,28 +160,6 @@ export default async function DashboardPage() {
           </div>
         </div>
       </div>
-
-      {missingTools.length > 0 && (
-        <div className="border border-telemetry-red/40 bg-telemetry-red/5 rounded-md p-4">
-          <div className="flex items-center gap-2 text-telemetry-red font-mono text-xs tracking-wide">
-            WARNING — REQUIRED TOOLS UNAVAILABLE
-          </div>
-          <div className="mt-2 grid sm:grid-cols-2 gap-2">
-            {missingTools.map((t) => (
-              <Link
-                key={t.id}
-                href={`/tools/${t.id}`}
-                className="text-sm flex items-center justify-between rounded-sm border border-graphite-700 px-3 py-2 hover:border-telemetry-red/50"
-              >
-                <span className="text-graphite-100">{t.tool_name}</span>
-                <span className="font-mono text-xs text-graphite-500">
-                  {t.subsystem_names || "Unassigned"}
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
 
       <section className="panel p-6">
         <div className="flex items-center justify-between flex-wrap gap-3">

@@ -3,6 +3,7 @@ import { getOpenSession, getSessions, getTeamHours, voidStaleSessions } from "@/
 import { PRESENCE_XP_ENABLED, SHOP } from "@/lib/xp/rules";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { CheckInControl } from "@/components/shop/CheckInControl";
+import { formatDateTime } from "@/lib/datetime";
 
 const hhmm = (minutes: number): string => {
   const h = Math.floor(minutes / 60);
@@ -72,8 +73,8 @@ export default async function ShopPage() {
             <tbody className="font-mono text-graphite-300">
               {sessions.map((s) => (
                 <tr key={s.id} className="border-t border-graphite-800">
-                  <td className="py-2">{new Date(s.opened_at).toLocaleString()}</td>
-                  <td className="py-2">{s.closed_at ? new Date(s.closed_at).toLocaleString() : "—"}</td>
+                  <td className="py-2">{formatDateTime(s.opened_at)}</td>
+                  <td className="py-2">{formatDateTime(s.closed_at)}</td>
                   <td className="py-2 text-right">
                     {s.state === "open" ? "running" : hhmm(s.verified_minutes + s.unverified_minutes)}
                   </td>

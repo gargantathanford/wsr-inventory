@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import { procurementPriority, normalizePriorities, priorityBand, isNeeded, isOwned } from "./scoring";
+import { daysUntil as daysUntilLocal } from "./datetime";
 
 export interface Part {
   id: string;
@@ -772,11 +773,60 @@ export function getCalendarEventById(id: string) {
   return { ...event, attachments };
 }
 
+// "Today" has to mean today in Tulsa. This used to be `new Date()` with the
+// hours zeroed, which is today in the CONTAINER — UTC — so from 19:00 local
+// onwards every countdown on the site was a day short.
 function daysUntil(dateStr: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(dateStr + "T00:00:00");
-  return Math.round((target.getTime() - today.getTime()) / 86400000);
+  return daysUntilLocal(dateStr) ?? 0;
+}
+
+/**
+ * The deadlines worth putting in front of somebody, soonest first, overdue
+ * at the top.
+ *
+ * Deliberately not getDueReminders. That one fires only on the exact days in
+ * reminder_intervals — [7, 1] by default — so a deadline eleven days out
+ * produces nothing at all, which is how the ETC notice of intent came to be
+ * invisible unless you went looking on the events page. An overview answers
+ * "what is coming" every day, not on two of them.
+ *
+ * Informational events are included: "notice of intent due" is a date the
+ * team must know even though nobody ticks it off.
+ */
+export interface DeadlineOverviewRow {
+  id: string;
+  title: string;
+  deadline_date: string;
+  deadline_time: string | null;
+  status: string;
+  priority: string;
+  event_type: string;
+  is_actionable: number;
+  subsystem_name: string | null;
+  responsible_user_name: string | null;
+  /** Calendar days from today in the team's timezone. Negative is overdue. */
+  days: number;
+}
+
+export function getDeadlineOverview(limit = 6, horizonDays = 60): DeadlineOverviewRow[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT ce.id, ce.title, ce.deadline_date, ce.deadline_time, ce.priority, ce.status,
+              ce.event_type, ce.is_actionable, s.name as subsystem_name, u.name as responsible_user_name
+         FROM calendar_events ce
+         LEFT JOIN subsystems s ON s.id = ce.subsystem_id
+         LEFT JOIN users u ON u.id = ce.responsible_user_id
+        WHERE ce.status != 'COMPLETED'
+        ORDER BY ce.deadline_date ASC, ce.deadline_time ASC`
+    )
+    .all() as any[];
+
+  return rows
+    .map((e) => ({ ...e, days: daysUntilLocal(e.deadline_date) }))
+    .filter((e) => e.days !== null && e.days <= horizonDays)
+    .sort((a, b) => a.days! - b.days!)
+    .slice(0, limit) as DeadlineOverviewRow[];
 }
 
 /** Deadlines due within their configured reminder window, scoped to a given user's visibility. */

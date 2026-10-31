@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useXp, type LedgerEntry, type AchievementStatus } from "./XpProvider";
 import { Portal } from "@/components/Portal";
+import { formatDay, formatTime, weekday } from "@/lib/datetime";
 
 /**
  * The XP surface in the nav. Deliberately small.
@@ -195,7 +196,7 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
                       <span className="flex-1 min-w-0">
                         <span className="block text-xs text-graphite-200">{e.label}</span>
                         <span className="block font-mono text-[10px] text-graphite-500 mt-0.5">
-                          {new Date(e.at).toLocaleDateString()} · {e.sourceId}
+                          {formatDay(e.at)} · {e.sourceId}
                           {e.status === "PENDING" && " · awaiting approval"}
                           {e.selfVerified && " · self-verified"}
                           {wasReversed && " · reversed"}
@@ -243,8 +244,8 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 function formatSpan(startsAt: string, endsAt: string): string {
   const start = new Date(startsAt);
   const end = new Date(endsAt);
-  const time = (d: Date) => d.toLocaleString(undefined, { hour: "numeric", minute: "2-digit" });
-  const day = (d: Date) => d.toLocaleString(undefined, { weekday: "short" });
+  const time = (d: Date) => formatTime(d.toISOString());
+  const day = (d: Date) => weekday(d.toISOString());
   const sameDay = start.toDateString() === end.toDateString();
   return sameDay
     ? `${day(start)} ${time(start)} – ${time(end)}`

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GateStatus, Readiness } from "@/lib/readiness/gates";
+import { formatDay } from "@/lib/datetime";
 
 /**
  * The gate panel on a subsystem page.
@@ -262,9 +263,9 @@ function GateRow({
 
           {(gate.endorsedBy || gate.approvedBy) && (
             <p className="font-mono text-[10px] text-graphite-600 mt-1">
-              {gate.endorsedBy && `endorsed ${gate.endorsedAt?.slice(0, 10) ?? ""}`}
+              {gate.endorsedBy && `endorsed ${formatDay(gate.endorsedAt, "")}`}
               {gate.endorsedBy && gate.approvedBy && " · "}
-              {gate.approvedBy && `approved ${gate.approvedAt?.slice(0, 10) ?? ""}`}
+              {gate.approvedBy && `approved ${formatDay(gate.approvedAt, "")}`}
             </p>
           )}
 

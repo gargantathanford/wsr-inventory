@@ -5,6 +5,7 @@ import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { StatusBadge } from "@/components/StatusBadge";
 import { PurchaseOrderActions } from "@/components/PurchaseOrderActions";
 import { PurchaseOrderDetailsEditor } from "@/components/PurchaseOrderDetailsEditor";
+import { formatDay } from "@/lib/datetime";
 
 export default async function PurchaseOrderDetailPage({ params }: { params: { id: string } }) {
   const db = getDb();
@@ -54,7 +55,7 @@ export default async function PurchaseOrderDetailPage({ params }: { params: { id
         <Row label="Responsible team" value={order.subsystem_name || "—"} />
         <Row label="Budget category" value={order.budget_category || "—"} />
         <Row label="Created by" value={order.created_by_name || "—"} />
-        <Row label="Approved by" value={order.approved_by_name ? `${order.approved_by_name} on ${order.approved_at?.slice(0, 10)}` : "—"} />
+        <Row label="Approved by" value={order.approved_by_name ? `${order.approved_by_name} on ${formatDay(order.approved_at)}` : "—"} />
         <Row label="Payment status" value={order.payment_status} />
         <Row label="Tracking number" value={order.tracking_number || "—"} />
         <Row label="Expected delivery" value={order.expected_delivery_date || "—"} />
@@ -116,7 +117,7 @@ export default async function PurchaseOrderDetailPage({ params }: { params: { id
                   {r.quantity_received}x received ({r.condition.replace(/_/g, " ")}) by {r.received_by_name}
                   {r.storage_location ? ` → ${r.storage_location}` : ""}
                 </span>
-                <span className="font-mono text-[11px] text-graphite-500">{r.date_received?.slice(0, 16).replace("T", " ")}</span>
+                <span className="font-mono text-[11px] text-graphite-500">{formatDay(r.date_received)}</span>
               </div>
             ))}
           </div>

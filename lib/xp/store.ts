@@ -37,7 +37,12 @@ import {
  * column can come later without changing any call site, since every function
  * here takes the zone as an argument.
  */
-export const TEAM_TIMEZONE = process.env.WSR_TIMEZONE || "America/Chicago";
+// Defined in lib/datetime.ts and re-exported here so the existing call sites
+// keep working. One constant, deliberately: the display layer having its own
+// idea of the team's timezone is exactly how an 11:00 shop session came to
+// read as 16:00 while the streak logic — which used this one — stayed right.
+export { TEAM_TIMEZONE } from "@/lib/datetime";
+import { TEAM_TIMEZONE } from "@/lib/datetime";
 
 interface XpRow {
   id: string;
