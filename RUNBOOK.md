@@ -183,6 +183,37 @@ team out the moment this lands.
 Skip this and sign-in still works, but issuing setup links and the
 change-password page both fail at runtime.
 
+## 7b. Gate-based completeness
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-readiness.ts
+docker compose run --rm maint npx tsx scripts/migrate-readiness.ts --commit
+```
+
+**Expect** `7 pending` then `steps applied : 7` — `subsystem_gates`,
+`subsystem_gate_log`, `subsystems.part_list_declared_complete` and four
+`interfaces.agreed_*` columns.
+
+**Tell the team before they see it.** Every subsystem will read **0%** the
+morning this lands, including ones with parts bought and fitted. That is
+correct: completeness is now eight gates signed off by people, and nothing is
+seeded as passed, because the dashboard asserting something no person has said
+is the defect this replaces. The old number counted owned parts, so a subsystem
+with one owned part read 100%.
+
+The climb back up is: a lead ticks "the part list is complete" on the subsystem
+page, endorses each gate as its data supports it, and the Chief Engineer or an
+Admin approves. Only approval counts.
+
+Two things that cap a subsystem regardless of gates:
+
+- a **P1 interface** not agreed by BOTH leads caps it at 84%
+- a closed gate whose data has since changed is flagged **stale** — it warns
+  loudly and does not lower the number
+
+Skip this and the app still boots, but every subsystem page and the dashboard
+headline fail at runtime because `subsystem_gates` does not exist.
+
 ## 8. Reference data — FSAE deadlines and the how-to procedure
 
 ```bash
@@ -321,8 +352,30 @@ to read the clause text. An empty list means step 9 did not run.
 (NORMAL / HIGH / URGENT) under the number; cost shows the line total with the
 range beneath it.
 
-**Dashboard** (`/dashboard`) — readiness reads `0%` when nothing is owned, not
-45%.
+**Dashboard** (`/dashboard`) — the headline is the mean of subsystem gate
+percentages, with a line beneath saying how many subsystems are fully signed
+off, how many are capped by an open critical interface, and how many closed
+gates no longer match their data.
+
+**Completeness panel** (any subsystem page) — eight gates, each with a state
+and a sentence saying what it is waiting on. Checks:
+
+- Every gate below `Scoped` reads `BLOCKED — Waiting on Scoped` until Scoped is
+  approved. Nothing below an unscoped list means anything.
+- Tick "the part list for this subsystem is complete" and `Scoped` moves to
+  `READY`, not `PASSED`. Endorse it as a lead and it moves to `ENDORSED`.
+  Approve as Chief/Admin and it reads `CLOSED`.
+- As a TEAM_LEADER, try to approve your own endorsement. It must refuse with
+  "Only the Chief Engineer or an Admin can approve a gate — endorse it instead".
+- Endorse `Rules checked` with nothing written. It must refuse and ask for
+  evidence.
+- Mark a gate out of scope with a one-word reason. It must refuse and ask for a
+  few words. `Scoped` can never be marked out of scope.
+- The `Tested` gate cannot be approved by whoever endorsed it, Chief included.
+
+**The car** (`/dashboard`) — click any region and it opens that subsystem.
+Point at a wheel and the readout says Wheels & Tires, not Brakes. Amber means
+the subsystem is held by an open critical interface rather than by its own work.
 
 **The car** (`/dashboard`, panel "The car, as it stands") — a top-down schematic
 draws itself in. With no parts entered every region is dim; that is correct, not
