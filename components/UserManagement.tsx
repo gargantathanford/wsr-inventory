@@ -277,6 +277,7 @@ function UserEditPanel({
     user.memberships.find((m) => m.role_in_subsystem === "LEADER")?.subsystem_id || ""
   );
   const [active, setActive] = useState(!!user.is_active);
+  const [deleteBlocked, setDeleteBlocked] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [issuedUrl, setIssuedUrl] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
@@ -345,14 +346,28 @@ function UserEditPanel({
     setSaving(false);
   }
 
+  /**
+   * Delete only works on an account that has never done anything — a mistyped
+   * invite, a test row. Anyone who has entered a part or sent a message cannot
+   * be deleted without erasing who did what, and the server says so in a
+   * sentence naming what they are attached to. That refusal is shown here as
+   * guidance, not as an error, because deactivating is the right answer and
+   * there is a button for it a few lines up.
+   */
   async function deleteUser() {
-    if (!confirm(`Delete ${user.name}? This cannot be undone.`)) return;
+    if (!confirm(`Delete ${user.name}? This only works if they have never entered anything, and cannot be undone.`))
+      return;
     const res = await fetch(`/api/users/${user.id}`, { method: "DELETE" });
-    if (res.ok) onChanged();
-    else {
-      const data = await res.json().catch(() => ({}));
-      onError(data.error || "Could not delete user.");
+    if (res.ok) {
+      onChanged();
+      return;
     }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409 && typeof data.error === "string") {
+      setDeleteBlocked(data.error);
+      return;
+    }
+    onError(typeof data.error === "string" ? data.error : "Could not delete user.");
   }
 
   async function addMembership() {
@@ -521,9 +536,29 @@ function UserEditPanel({
       </div>
 
       {!isSelf && (
-        <button className="text-xs text-telemetry-red hover:underline" onClick={deleteUser}>
-          Delete user permanently
-        </button>
+        <div className="space-y-2">
+          <button className="text-xs text-telemetry-red hover:underline" onClick={deleteUser}>
+            Delete user permanently
+          </button>
+          <p className="text-[11px] text-graphite-600 leading-relaxed max-w-prose">
+            Only works on an account that has never entered anything. Once somebody has added a part,
+            signed a gate or sent a message, deleting them would erase who did it — deactivate instead.
+          </p>
+          {deleteBlocked && (
+            <div className="rounded border border-telemetry-amber/40 bg-telemetry-amber/[0.06] px-3 py-2.5">
+              <p className="text-[11px] text-graphite-300 leading-relaxed">{deleteBlocked}</p>
+              <button
+                className="btn-ghost text-[11px] py-1 mt-2"
+                onClick={async () => {
+                  setDeleteBlocked(null);
+                  if (active) await toggleActive();
+                }}
+              >
+                {active ? "Deactivate instead" : "Already deactivated"}
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

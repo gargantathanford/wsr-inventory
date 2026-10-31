@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { StatusBadge } from "@/components/StatusBadge";
+import { getSession } from "@/lib/auth";
 
 export default async function PurchaseOrdersPage({ searchParams }: { searchParams: { status?: string } }) {
+  const user = await getSession();
   const db = getDb();
   let sql = `
     SELECT po.*, s.name as subsystem_name FROM purchase_orders po LEFT JOIN subsystems s ON s.id = po.subsystem_id WHERE 1=1
@@ -30,9 +32,18 @@ export default async function PurchaseOrdersPage({ searchParams }: { searchParam
           <div className="data-label">PURCHASE ORDERS</div>
           <h1 className="text-2xl font-semibold text-graphite-100 mt-1">{withTotals.length} orders</h1>
         </div>
-        <Link href="/purchase-orders/new" className="btn-primary">
-          + New Purchase Order
-        </Link>
+        {/* Hidden for team members: the API refuses them and the page now
+            redirects them to a Purchase Request, so showing the button would
+            only invite a wasted trip through the form. */}
+        {user?.role !== "TEAM_MEMBER" ? (
+          <Link href="/purchase-orders/new" className="btn-primary">
+            + New Purchase Order
+          </Link>
+        ) : (
+          <Link href="/purchase-requests/new" className="btn-primary">
+            + New Purchase Request
+          </Link>
+        )}
       </div>
 
       <div className="flex gap-2 text-xs font-mono flex-wrap">

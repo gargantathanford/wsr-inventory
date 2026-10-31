@@ -5,6 +5,7 @@ import { newId } from "@/lib/id";
 import { getSession, hashPassword } from "@/lib/auth";
 import { checkPassword } from "@/lib/password";
 import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
+import { canDeleteUser } from "@/lib/users";
 
 async function requireAdmin() {
   const user = await getSession();
@@ -99,7 +100,41 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     return NextResponse.json({ error: "You cannot delete your own account." }, { status: 400 });
   }
   const db = getDb();
-  const result = db.prepare(`DELETE FROM users WHERE id = ?`).run(params.id);
-  if (result.changes === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json({ ok: true });
+
+  const exists = db.prepare(`SELECT 1 FROM users WHERE id = ?`).get(params.id);
+  if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Checked BEFORE attempting the delete. Letting SQLite refuse produces
+  // "FOREIGN KEY constraint failed", which escapes as a bodiless 500 and tells
+  // an admin only that something is broken — the state this was found in.
+  const verdict = canDeleteUser(params.id);
+  if (!verdict.deletable) {
+    return NextResponse.json(
+      { error: verdict.reason, references: verdict.references, canDeactivate: true },
+      { status: 409 }
+    );
+  }
+
+  try {
+    const result = db.prepare(`DELETE FROM users WHERE id = ?`).run(params.id);
+    if (result.changes === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    // A reference added between the check and the delete, or a table this
+    // scan does not reach. Still answers with a sentence rather than a 500.
+    return dbError(e, "Could not delete this account");
+  }
+}
+
+/**
+ * What an account is attached to, so the UI can say whether Delete will work
+ * before the admin clicks it.
+ *
+ *   GET /api/users/{id}/references  -- served here as ?references=1
+ */
+export async function HEAD(_req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireAdmin();
+  if (gate.error) return new NextResponse(null, { status: 403 });
+  const verdict = canDeleteUser(params.id);
+  return new NextResponse(null, { status: verdict.deletable ? 204 : 409 });
 }

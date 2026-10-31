@@ -43,15 +43,47 @@ export function MessagingWidget({ currentUserId }: { currentUserId: string }) {
   }, []);
 
   // Poll active channel messages only while the widget is open — no reason to hit the DB otherwise.
+  //
+  // THE BUG THIS FIXES. Opening a new DM sets activeChannel to a synthetic
+  // "dm-pending:<uid>" key, which has no messages and is not a real channel.
+  // The API correctly rejects it (its auth check looks for the user's own id
+  // among the colon-separated parts, and finds neither participant), and this
+  // effect used to do `if (!res.ok) return` — leaving `messages` holding the
+  // PREVIOUS conversation. So starting a chat with one person showed you the
+  // last thing you said to somebody else, under the new person's name, until
+  // you sent a message and the refetch replaced it.
+  //
+  // Two separate mistakes, both fixed here:
+  //   1. the channel changed but the old messages were never cleared
+  //   2. a failed fetch left stale content on screen instead of nothing
   useEffect(() => {
     if (minimized || !activeChannel) return;
+
+    // Clear FIRST, synchronously, before any await. Whatever the fetch does,
+    // the previous conversation must not be on screen under this heading.
+    setMessages([]);
+
+    // A pending DM has no channel and nothing to load. Asking for it produced
+    // a 403 in the server log on every poll, which is also how this hid.
+    if (activeChannel.startsWith("dm-pending:")) return;
+
     let cancelled = false;
+    const channelAtStart = activeChannel;
+
     async function poll() {
-      const res = await fetch(`/api/messages?channel=${encodeURIComponent(activeChannel!)}`);
-      if (!res.ok || cancelled) return;
+      const res = await fetch(`/api/messages?channel=${encodeURIComponent(channelAtStart)}`);
+      // `cancelled` covers the unmount and the re-run; comparing the key covers
+      // a slow response from a channel the user has already navigated away from
+      // arriving after a fast one from the channel they are now looking at.
+      if (cancelled || channelAtStart !== activeChannel) return;
+      if (!res.ok) {
+        setMessages([]);
+        return;
+      }
       const data = await res.json();
       setMessages(data.messages || []);
     }
+
     poll();
     const id = setInterval(poll, 5_000);
     return () => {
@@ -125,14 +157,13 @@ export function MessagingWidget({ currentUserId }: { currentUserId: string }) {
           <div>
             <div className="data-label mb-1.5">TEAM CHANNELS</div>
             <div className="space-y-1">
-              {teamChannels.map((c) => (
-                <button
+              {teamChannels.map((c: any) => (
+                <ChannelButton
                   key={c.channel_key}
+                  label={`# ${c.name}`}
+                  unread={c.unread ?? 0}
                   onClick={() => setActiveChannel(c.channel_key)}
-                  className="w-full text-left text-xs px-2 py-1.5 rounded-sm hover:bg-graphite-850 text-graphite-300"
-                >
-                  # {c.name}
-                </button>
+                />
               ))}
               {teamChannels.length === 0 && <div className="text-xs text-graphite-600">No team channels yet.</div>}
             </div>
@@ -146,13 +177,12 @@ export function MessagingWidget({ currentUserId }: { currentUserId: string }) {
             </div>
             <div className="space-y-1">
               {directChannels.map((c: any) => (
-                <button
+                <ChannelButton
                   key={c.channel_key}
+                  label={c.name}
+                  unread={c.unread ?? 0}
                   onClick={() => setActiveChannel(c.channel_key)}
-                  className="w-full text-left text-xs px-2 py-1.5 rounded-sm hover:bg-graphite-850 text-graphite-300"
-                >
-                  {c.name}
-                </button>
+                />
               ))}
               {directChannels.length === 0 && <div className="text-xs text-graphite-600">No conversations yet.</div>}
             </div>
@@ -249,5 +279,42 @@ function ChatIcon() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
+  );
+}
+
+/**
+ * One conversation in the list, with its own unread count.
+ *
+ * The widget used to show a total on the icon and nothing per channel, so the
+ * only way to find a new message was to open every conversation in turn. The
+ * name is emphasised rather than just badged: the thing you are looking for is
+ * WHO, and a lone number on the right is easy to skim past.
+ */
+function ChannelButton({
+  label,
+  unread,
+  onClick
+}: {
+  label: string;
+  unread: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center justify-between gap-2 text-left text-xs px-2 py-1.5 rounded-sm
+                  hover:bg-graphite-850 ${unread > 0 ? "text-graphite-100 font-medium" : "text-graphite-300"}`}
+    >
+      <span className="truncate">{label}</span>
+      {unread > 0 && (
+        <span
+          className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-signal text-graphite-950
+                     font-mono text-[10px] font-semibold flex items-center justify-center"
+          aria-label={`${unread} unread`}
+        >
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </button>
   );
 }
