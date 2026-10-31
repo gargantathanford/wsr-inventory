@@ -76,7 +76,7 @@ export function PurchaseRequestActions({
             Cancel request
           </button>
         )}
-        {isApprover && ["SUBMITTED", "UNDER_REVIEW"].includes(request.status) && (
+        {isApprover && ["SUBMITTED", "UNDER_REVIEW", "REJECTED"].includes(request.status) && (
           <>
             {request.status === "SUBMITTED" && (
               <button className="btn-ghost text-xs" disabled={loading} onClick={() => setStatus("UNDER_REVIEW")}>
@@ -91,6 +91,20 @@ export function PurchaseRequestActions({
             </button>
           </>
         )}
+        {/* A rejection is no longer a dead end. Reopening returns it to review
+            rather than approving it, so the decision is still made deliberately,
+            and the API requires a stated reason that lands in the history next
+            to the original rejection. */}
+        {isApprover && request.status === "REJECTED" && (
+          <button
+            className="btn-ghost text-xs"
+            disabled={loading}
+            onClick={() => setStatus("UNDER_REVIEW", decisionNote)}
+            title="Puts this back into review. Needs a reason."
+          >
+            Reopen for review
+          </button>
+        )}
         {isApprover && request.status === "APPROVED" && (
           <button className="btn-primary text-xs" disabled={loading} onClick={convert}>
             Convert to Purchase Order
@@ -98,10 +112,14 @@ export function PurchaseRequestActions({
         )}
       </div>
 
-      {isApprover && ["SUBMITTED", "UNDER_REVIEW"].includes(request.status) && (
+      {isApprover && ["SUBMITTED", "UNDER_REVIEW", "REJECTED"].includes(request.status) && (
         <input
           className="input text-xs"
-          placeholder="Decision note (included with approve/reject)"
+          placeholder={
+            request.status === "REJECTED"
+              ? "Why is this being reopened? Required, and it goes into the history."
+              : "Decision note (included with approve/reject)"
+          }
           value={decisionNote}
           onChange={(e) => setDecisionNote(e.target.value)}
         />

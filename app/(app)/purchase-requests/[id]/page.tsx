@@ -19,12 +19,17 @@ export default async function PurchaseRequestDetailPage({ params }: { params: { 
     .get(params.id) as any;
   if (!request) notFound();
 
+  // Counted here so the heading can say a thread exists without the reader
+  // having to scroll to the bottom of the page to find out.
   const events = db
     .prepare(
       `SELECT e.*, u.name as user_name FROM purchase_request_events e LEFT JOIN users u ON u.id = e.user_id
        WHERE e.request_id = ? ORDER BY e.created_at ASC`
     )
     .all(params.id) as any[];
+
+  const commentCount = events.filter((e: any) => e.event_type === "COMMENT").length;
+  const infoRequests = events.filter((e: any) => e.event_type === "INFO_REQUESTED").length;
 
   const user = await getSession();
   const isOwner = !!user && user.id === request.requesting_user_id;
@@ -87,24 +92,70 @@ export default async function PurchaseRequestDetailPage({ params }: { params: { 
         <PurchaseRequestActions request={request} isOwner={isOwner} isApprover={isApprover} />
       </div>
 
+      {/*
+        Discussion, not "HISTORY".
+        A comment and a status change used to render identically in one flat
+        list at the bottom of the page, so somebody asking a question looked
+        exactly like the system noting a transition — which is how a comment
+        got lost. Comments now carry the accent edge and their text at full
+        size; status changes shrink to a single timeline line, because the fact
+        that something moved SUBMITTED → UNDER_REVIEW is reference material,
+        not conversation.
+      */}
       <div>
-        <div className="data-label mb-3">HISTORY</div>
+        <div className="flex items-baseline justify-between mb-3">
+          <div className="data-label">DISCUSSION &amp; HISTORY</div>
+          <span className="font-mono text-[11px] text-graphite-500">
+            {commentCount === 0
+              ? "no comments yet"
+              : `${commentCount} comment${commentCount === 1 ? "" : "s"}`}
+            {infoRequests > 0 && ` · ${infoRequests} information request${infoRequests === 1 ? "" : "s"}`}
+          </span>
+        </div>
         <div className="space-y-2">
-          {events.map((e) => (
-            <div key={e.id} className="panel p-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-graphite-200">
-                  {e.event_type === "STATUS_CHANGE"
-                    ? `${e.user_name || "System"} moved ${e.from_status || "—"} → ${e.to_status}`
-                    : e.event_type === "INFO_REQUESTED"
-                    ? `${e.user_name} requested more information`
-                    : `${e.user_name} commented`}
-                </span>
-                <span className="font-mono text-[11px] text-graphite-500">{e.created_at?.slice(0, 16).replace("T", " ")}</span>
+          {events.map((e: any) => {
+            const isTalk = e.event_type === "COMMENT" || e.event_type === "INFO_REQUESTED";
+            const asked = e.event_type === "INFO_REQUESTED";
+
+            if (!isTalk) {
+              return (
+                <div key={e.id} className="flex items-baseline gap-3 px-3 py-1.5 text-xs text-graphite-500">
+                  <span className="font-mono text-[10px] text-graphite-600 shrink-0">
+                    {e.created_at?.slice(0, 16).replace("T", " ")}
+                  </span>
+                  <span>
+                    {e.user_name || "System"} moved {e.from_status || "—"} → {e.to_status}
+                  </span>
+                  {e.comment && <span className="text-graphite-400 truncate">— {e.comment}</span>}
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={e.id}
+                className={`panel p-4 border-l-2 ${asked ? "border-l-telemetry-amber" : "border-l-signal"}`}
+              >
+                <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                  <span className="text-sm text-graphite-100">
+                    {e.user_name}
+                    {asked && (
+                      <span className="ml-2 font-mono text-[10px] text-telemetry-amber">
+                        ASKED FOR MORE INFORMATION
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-mono text-[11px] text-graphite-500">
+                    {e.created_at?.slice(0, 16).replace("T", " ")}
+                  </span>
+                </div>
+                {e.comment && <p className="text-sm text-graphite-300 mt-2 leading-relaxed">{e.comment}</p>}
               </div>
-              {e.comment && <p className="text-xs text-graphite-400 mt-1">{e.comment}</p>}
-            </div>
-          ))}
+            );
+          })}
+          {events.length === 0 && (
+            <p className="text-xs text-graphite-500">Nothing yet. Comments and decisions both land here.</p>
+          )}
         </div>
       </div>
     </div>

@@ -5,7 +5,14 @@ import { StatusBadge, ImportanceBadge } from "@/components/StatusBadge";
 export default async function PurchaseRequestsPage({ searchParams }: { searchParams: { status?: string } }) {
   const db = getDb();
   let sql = `
-    SELECT pr.*, u.name as requesting_user_name, s.name as subsystem_name
+    SELECT pr.*, u.name as requesting_user_name, s.name as subsystem_name,
+      -- Surfaced in the list so a request with a conversation on it is visible
+      -- without opening each one. A thread nobody can see is a thread nobody
+      -- answers.
+      (SELECT COUNT(*) FROM purchase_request_events e
+        WHERE e.request_id = pr.id AND e.event_type = 'COMMENT') AS comment_count,
+      (SELECT COUNT(*) FROM purchase_request_events e
+        WHERE e.request_id = pr.id AND e.event_type = 'INFO_REQUESTED') AS info_requests
     FROM purchase_requests pr JOIN users u ON u.id = pr.requesting_user_id
     LEFT JOIN subsystems s ON s.id = pr.subsystem_id WHERE 1=1
   `;
@@ -56,7 +63,25 @@ export default async function PurchaseRequestsPage({ searchParams }: { searchPar
                 {r.estimated_cost != null ? ` · $${r.estimated_cost.toLocaleString()}` : ""}
               </div>
             </div>
-            <StatusBadge status={r.status} />
+            <div className="flex items-center gap-3 shrink-0">
+              {r.info_requests > 0 && (
+                <span
+                  className="font-mono text-[10px] text-telemetry-amber"
+                  title="Somebody has asked the requester for more information"
+                >
+                  NEEDS INFO
+                </span>
+              )}
+              {r.comment_count > 0 && (
+                <span
+                  className="font-mono text-[11px] text-graphite-400"
+                  title={`${r.comment_count} comment${r.comment_count === 1 ? "" : "s"} on this request`}
+                >
+                  {r.comment_count} 💬
+                </span>
+              )}
+              <StatusBadge status={r.status} />
+            </div>
           </Link>
         ))}
         {requests.length === 0 && <div className="p-6 text-sm text-graphite-500">No purchase requests yet.</div>}

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { getSession, canReviewSubsystem } from "@/lib/auth";
 import { StatusBadge } from "@/components/StatusBadge";
 import { PurchaseOrderActions } from "@/components/PurchaseOrderActions";
+import { PurchaseOrderDetailsEditor } from "@/components/PurchaseOrderDetailsEditor";
 
 export default async function PurchaseOrderDetailPage({ params }: { params: { id: string } }) {
   const db = getDb();
@@ -59,6 +60,10 @@ export default async function PurchaseOrderDetailPage({ params }: { params: { id
         <Row label="Expected delivery" value={order.expected_delivery_date || "—"} />
         <Row label="Actual delivery" value={order.actual_delivery_date || "—"} />
       </div>
+
+      {/* These read "—" until somebody fills them in, and until now there was
+          nowhere to do that — which looked like the fields were broken. */}
+      <PurchaseOrderDetailsEditor order={order} canEdit={canEdit} />
 
       <div>
         <div className="data-label mb-2">LINE ITEMS</div>

@@ -35,7 +35,16 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   SUBMITTED: ["UNDER_REVIEW", "APPROVED", "REJECTED", "CANCELLED"],
   UNDER_REVIEW: ["APPROVED", "REJECTED", "CANCELLED"],
   APPROVED: ["CONVERTED_TO_PO", "CANCELLED"],
-  REJECTED: [],
+  // A rejection can be reopened back into review. It used to be a dead end,
+  // which meant an accidental or premature "no" forced the requester to retype
+  // the whole thing — losing the justification they wrote and the comment
+  // thread explaining the decision, which is the most useful part of the
+  // record. Reopening keeps the history and makes the reversal part of it.
+  //
+  // Reopening is NOT re-approving: it goes back to UNDER_REVIEW, so the
+  // decision still has to be made again deliberately. Approver-only, and the
+  // reason is required below.
+  REJECTED: ["UNDER_REVIEW"],
   CANCELLED: [],
   CONVERTED_TO_PO: []
 };
@@ -62,6 +71,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const approverOnlyTransitions = new Set(["UNDER_REVIEW", "APPROVED", "REJECTED"]);
     if (approverOnlyTransitions.has(body.status) && !isApprover) {
       return NextResponse.json({ error: "Only the relevant Team Lead, Chief Engineer, or Admin can decide this request." }, { status: 403 });
+    }
+
+    // Reversing a decision needs a stated reason, because the rejection is
+    // already in the history with a reason of its own and a silent reversal
+    // leaves the record contradicting itself.
+    const isReopen = request.status === "REJECTED" && body.status === "UNDER_REVIEW";
+    // The client sends this as `decision_note`; `note` is accepted too so a
+    // direct API call does not fail on a field name.
+    const reopenNote = String(body.decision_note ?? body.note ?? "").trim();
+    if (isReopen && reopenNote.length < 10) {
+      return NextResponse.json(
+        {
+          error:
+            "Say why this rejection is being reopened. It goes into the request history next to the " +
+            "original decision, so whoever reads this later can see what changed."
+        },
+        { status: 422 }
+      );
     }
     if (!approverOnlyTransitions.has(body.status) && !isOwner && !isApprover) {
       return NextResponse.json({ error: "You cannot modify this request." }, { status: 403 });
