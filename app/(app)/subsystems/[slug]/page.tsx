@@ -14,7 +14,8 @@ import { ProgressBar } from "@/components/ProgressBar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { GatePanel } from "@/components/readiness/GatePanel";
-import { getReadiness } from "@/lib/readiness/store";
+import { getReadiness, getMassStanding } from "@/lib/readiness/store";
+import { MassPanel } from "@/components/readiness/MassPanel";
 import { getInterfacesFor } from "@/lib/interfaces";
 import { getSession } from "@/lib/auth";
 
@@ -34,6 +35,7 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
   // it as "completion" is the bug this release fixes.
   const readiness = getReadiness(subsystem.id);
   const subsystemInterfaces = getInterfacesFor(subsystem.id);
+  const massStanding = getMassStanding(subsystem.id);
   const user = await getSession();
   // getSubsystemMembers selects `u.id`, not `user_id` — checking the wrong
   // field meant isLead was permanently false and no team leader could endorse
@@ -147,6 +149,12 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
           </ul>
         </section>
       )}
+
+      <MassPanel
+        subsystemId={subsystem.id}
+        standing={massStanding}
+        canEdit={isLead || canApprove}
+      />
 
       <GatePanel
         subsystemId={subsystem.id}

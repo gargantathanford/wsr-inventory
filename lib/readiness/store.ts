@@ -54,13 +54,14 @@ const NOT_FITTED = /\b(spare|consumable|tool|tooling|fixture|jig|ppe|fastener ki
 function loadFacts(subsystemId: string): SubsystemFacts {
   const db = getDb();
 
-  const declared = db
-    .prepare(`SELECT part_list_declared_complete AS d FROM subsystems WHERE id = ?`)
-    .get(subsystemId) as { d: number } | undefined;
+  const sub = db
+    .prepare(`SELECT part_list_declared_complete AS d, mass_budget_kg FROM subsystems WHERE id = ?`)
+    .get(subsystemId) as { d: number; mass_budget_kg: number | null } | undefined;
 
   const partRows = db
     .prepare(
       `SELECT p.id, p.design_status, p.status, p.supplier, p.purchase_url, p.category, p.part_name,
+              p.weight_kg, p.allocated_mass_kg, p.mass_not_applicable,
               -- entity_type/entity_id, matching getRuleCitations. There is no
               -- part_id on this table, and cited_by is the user who added it.
               (SELECT COUNT(*) FROM rule_citations rc
@@ -76,16 +77,25 @@ function loadFacts(subsystemId: string): SubsystemFacts {
     purchase_url: string | null;
     category: string | null;
     part_name: string;
+    weight_kg: number | null;
+    allocated_mass_kg: number | null;
+    mass_not_applicable: number;
     citations: number;
   }>;
 
   const parts: PartFacts[] = partRows.map((r) => ({
     id: r.id,
+    name: r.part_name,
     designStatus: r.design_status,
     status: r.status,
     citationCount: r.citations,
     isManufactured: inferManufactured(r),
-    isFitted: !NOT_FITTED.test(`${r.category ?? ""} ${r.part_name}`)
+    isFitted: !NOT_FITTED.test(`${r.category ?? ""} ${r.part_name}`),
+    // Per unit, both of them — the gate asks whether this part's mass is
+    // KNOWN, not what the line total comes to.
+    massKg: r.weight_kg,
+    allocatedMassKg: r.allocated_mass_kg,
+    massNotApplicable: !!r.mass_not_applicable
   }));
 
   // Interfaces on EITHER side. A joint is one row shared by two subsystems, so
@@ -140,10 +150,11 @@ function loadFacts(subsystemId: string): SubsystemFacts {
     .get(subsystemId) as { n: number } | undefined;
 
   return {
-    partListDeclaredComplete: !!declared?.d,
+    partListDeclaredComplete: !!sub?.d,
     parts,
     interfaces,
-    testsWithEvidence: tests?.n ?? 0
+    testsWithEvidence: tests?.n ?? 0,
+    massBudgetKg: sub?.mass_budget_kg ?? null
   };
 }
 
@@ -534,4 +545,113 @@ export function getVehicleReadiness(): {
     capped: all.filter((r) => r.readiness.ceiling !== null).length,
     stale: all.reduce((s, r) => s + r.readiness.stale.length, 0)
   };
+}
+
+/**
+ * Mass standing for one subsystem: what it is committed to against its budget.
+ *
+ * Quantity matters here where it does not in the gate. The gate asks whether a
+ * part's mass is KNOWN, which is a per-unit question. The budget asks what the
+ * car will weigh, which means four uprights at 1.2 kg is 4.8 kg.
+ */
+export function getMassStanding(subsystemId: string): {
+  budgetKg: number | null;
+  committedKg: number;
+  measuredKg: number;
+  allocatedOnlyKg: number;
+  excusedParts: number;
+  unknownParts: number;
+  overBy: number | null;
+} {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT weight_kg, allocated_mass_kg, mass_not_applicable, quantity_required, status
+         FROM parts WHERE subsystem_id = ?`
+    )
+    .all(subsystemId) as Array<{
+    weight_kg: number | null;
+    allocated_mass_kg: number | null;
+    mass_not_applicable: number;
+    quantity_required: number;
+    status: string;
+  }>;
+
+  const budget = (
+    db.prepare(`SELECT mass_budget_kg FROM subsystems WHERE id = ?`).get(subsystemId) as
+      | { mass_budget_kg: number | null }
+      | undefined
+  )?.mass_budget_kg ?? null;
+
+  let measured = 0;
+  let allocatedOnly = 0;
+  let excused = 0;
+  let unknown = 0;
+
+  for (const r of rows) {
+    if (r.status === "NO_LONGER_NEEDED") continue;
+    if (r.mass_not_applicable) {
+      excused++;
+      continue;
+    }
+    const qty = r.quantity_required > 0 ? r.quantity_required : 1;
+    if (typeof r.weight_kg === "number") measured += r.weight_kg * qty;
+    else if (typeof r.allocated_mass_kg === "number") allocatedOnly += r.allocated_mass_kg * qty;
+    else unknown++;
+  }
+
+  const committed = measured + allocatedOnly;
+  return {
+    budgetKg: budget,
+    committedKg: committed,
+    measuredKg: measured,
+    allocatedOnlyKg: allocatedOnly,
+    excusedParts: excused,
+    unknownParts: unknown,
+    overBy: budget && committed > budget ? committed - budget : null
+  };
+}
+
+/** Vehicle-wide mass: every subsystem's budget and what is committed against it. */
+export function getVehicleMass(): {
+  budgetKg: number;
+  committedKg: number;
+  unbudgetedSubsystems: number;
+  overBudgetSubsystems: number;
+} {
+  const db = getDb();
+  const subs = db.prepare(`SELECT id, mass_budget_kg FROM subsystems`).all() as Array<{
+    id: string;
+    mass_budget_kg: number | null;
+  }>;
+  let budget = 0;
+  let committed = 0;
+  let unbudgeted = 0;
+  let over = 0;
+  for (const s of subs) {
+    const m = getMassStanding(s.id);
+    if (s.mass_budget_kg) budget += s.mass_budget_kg;
+    else if (m.committedKg > 0) unbudgeted++;
+    committed += m.committedKg;
+    if (m.overBy !== null) over++;
+  }
+  return { budgetKg: budget, committedKg: committed, unbudgetedSubsystems: unbudgeted, overBudgetSubsystems: over };
+}
+
+/** A lead revising their own subsystem's mass budget. */
+export function setMassBudget(
+  subsystemId: string,
+  user: { id: string; role: string },
+  budgetKg: number | null
+): WriteResult {
+  const actor = actorFor(subsystemId, user);
+  const isChief = user.role === "ADMIN" || user.role === "CHIEF_ENGINEER";
+  if (!actor.leadsThisSubsystem && !isChief) {
+    return { ok: false, reason: "Only this subsystem's lead or the Chief Engineer can change its mass budget." };
+  }
+  if (budgetKg !== null && (!Number.isFinite(budgetKg) || budgetKg <= 0)) {
+    return { ok: false, reason: "A mass budget has to be a positive number of kilograms." };
+  }
+  getDb().prepare(`UPDATE subsystems SET mass_budget_kg = ? WHERE id = ?`).run(budgetKg, subsystemId);
+  return { ok: true };
 }

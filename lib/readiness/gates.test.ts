@@ -18,6 +18,9 @@ function part(over: Partial<PartFacts> = {}): PartFacts {
     citationCount: 0,
     isManufactured: false,
     isFitted: true,
+    // An ordinary part HAS a mass. Tests about a missing one pass massKg: null
+    // explicitly, so the absence is always deliberate rather than incidental.
+    massKg: 1,
     ...over
   };
 }
@@ -155,7 +158,7 @@ describe("derivation vs sign-off", () => {
       }),
       [signed("SCOPED")]
     );
-    assert.match(gs.find((g) => g.gate === "DESIGN_FROZEN")!.detail, /2 of 3 not frozen yet/);
+    assert.match(gs.find((g) => g.gate === "DESIGN_FROZEN")!.detail, /2 of 3 not frozen/);
   });
 
   test("TESTED can never be derived from part statuses", () => {
@@ -350,7 +353,7 @@ describe("a signed gate notices when the data moves under it", () => {
     );
     const d = r.gates.find((g) => g.gate === "DESIGN_FROZEN")!;
     assert.equal(d.stale, true);
-    assert.match(d.staleReason!, /1 of 1 not frozen yet/);
+    assert.match(d.staleReason!, /1 of 1 not frozen/);
   });
 
   test("a part coming back off the car flags Installed stale", () => {
@@ -731,5 +734,150 @@ describe("the P1 ceiling", () => {
     ]);
     assert.equal(r.pct, 84);
     assert.match(r.ceiling!.reason, /2 critical interfaces/);
+  });
+});
+
+describe("mass is required before a design can be frozen", () => {
+  test("a frozen part with no mass does NOT satisfy the gate", () => {
+    const gs = evaluateGates(
+      facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", massKg: null })] }),
+      [signed("SCOPED")]
+    );
+    const d = gs.find((g) => g.gate === "DESIGN_FROZEN")!;
+    assert.equal(d.state, "OPEN");
+    assert.match(d.detail, /1 with no mass recorded/);
+  });
+
+  test("a measured mass satisfies it", () => {
+    const gs = evaluateGates(
+      facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", massKg: 2.4 })] }),
+      [signed("SCOPED")]
+    );
+    assert.equal(gs.find((g) => g.gate === "DESIGN_FROZEN")!.state, "READY");
+  });
+
+  test("a lead's allocation satisfies it, before anything is weighed", () => {
+    const gs = evaluateGates(
+      facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", massKg: null, allocatedMassKg: 1.8 })] }),
+      [signed("SCOPED")]
+    );
+    assert.equal(gs.find((g) => g.gate === "DESIGN_FROZEN")!.state, "READY");
+  });
+
+  test("an excused part needs no mass at all", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN", massKg: null, massNotApplicable: true, name: "M8 bolts" })]
+      }),
+      [signed("SCOPED")]
+    );
+    assert.equal(gs.find((g) => g.gate === "DESIGN_FROZEN")!.state, "READY");
+  });
+
+  test("zero is a recorded mass, not a missing one", () => {
+    const gs = evaluateGates(
+      facts({ partListDeclaredComplete: true, parts: [part({ designStatus: "FROZEN", massKg: 0 })] }),
+      [signed("SCOPED")]
+    );
+    assert.equal(gs.find((g) => g.gate === "DESIGN_FROZEN")!.state, "READY");
+  });
+
+  test("the message names the offending parts, not just a count", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [
+          part({ designStatus: "FROZEN", massKg: 1 }),
+          part({ designStatus: "FROZEN", massKg: null, name: "Upright" }),
+          part({ designStatus: "FROZEN", massKg: null, name: "Hub" })
+        ]
+      }),
+      [signed("SCOPED")]
+    );
+    const d = gs.find((g) => g.gate === "DESIGN_FROZEN")!.detail;
+    assert.match(d, /Upright/);
+    assert.match(d, /Hub/);
+  });
+
+  test("unfrozen AND unmassed are reported together", () => {
+    const gs = evaluateGates(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "SELECTED" }), part({ designStatus: "FROZEN", massKg: null })]
+      }),
+      [signed("SCOPED")]
+    );
+    const d = gs.find((g) => g.gate === "DESIGN_FROZEN")!.detail;
+    assert.match(d, /not frozen/);
+    assert.match(d, /no mass recorded/);
+  });
+});
+
+describe("the mass budget ceiling", () => {
+  function overBudget(massKg: number, budget: number | null) {
+    return readinessFor(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN", status: "INSTALLED", citationCount: 1, massKg })],
+        testsWithEvidence: 1,
+        interfaces: [iface()],
+        massBudgetKg: budget
+      }),
+      GATES.map((g) => (g.id === "MANUFACTURED" ? na("MANUFACTURED", "all bought") : signed(g.id)))
+    );
+  }
+
+  test("under budget is unaffected", () => {
+    const r = overBudget(30, 40);
+    assert.equal(r.pct, 100);
+    assert.equal(r.ceiling, null);
+  });
+
+  test("over budget caps at 92 and states the overage", () => {
+    const r = overBudget(52, 40);
+    assert.equal(r.gatePct, 100);
+    assert.equal(r.pct, 92);
+    assert.match(r.ceiling!.reason, /52\.0 kg against a 40\.0 kg budget/);
+    assert.match(r.ceiling!.reason, /12\.0 kg over, 30%/);
+  });
+
+  test("exactly on budget is not over", () => {
+    assert.equal(overBudget(40, 40).ceiling, null);
+  });
+
+  test("no budget set means no ceiling — not a free pass flagged as a problem", () => {
+    assert.equal(overBudget(500, null).ceiling, null);
+  });
+
+  test("an open P1 interface outranks the mass cap, being lower", () => {
+    const r = readinessFor(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [part({ designStatus: "FROZEN", status: "INSTALLED", citationCount: 1, massKg: 99 })],
+        testsWithEvidence: 1,
+        interfaces: [iface({ priority: "P1", status: "OPEN", agreedBothSides: false })],
+        massBudgetKg: 10
+      }),
+      GATES.map((g) => (g.id === "MANUFACTURED" ? na("MANUFACTURED", "all bought") : signed(g.id)))
+    );
+    assert.equal(r.pct, 84, "the lowest applicable cap wins");
+  });
+
+  test("excused parts do not count toward the committed mass", () => {
+    const r = readinessFor(
+      facts({
+        partListDeclaredComplete: true,
+        parts: [
+          part({ designStatus: "FROZEN", status: "INSTALLED", citationCount: 1, massKg: 30 }),
+          part({ designStatus: "FROZEN", status: "INSTALLED", massKg: 50, massNotApplicable: true })
+        ],
+        testsWithEvidence: 1,
+        interfaces: [iface()],
+        massBudgetKg: 40
+      }),
+      GATES.map((g) => (g.id === "MANUFACTURED" ? na("MANUFACTURED", "all bought") : signed(g.id)))
+    );
+    assert.equal(r.ceiling, null, "30 kg of counted mass against a 40 kg budget");
   });
 });

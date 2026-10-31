@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS subsystems (
   -- What SCOPED asserts: a lead has declared the part list complete. Stored
   -- rather than inferred, because no count can tell you a list is finished.
   part_list_declared_complete INTEGER NOT NULL DEFAULT 0,
+  -- This subsystem's share of the vehicle mass target, in kilograms. Seeded
+  -- from vehicle_targets on migration and editable afterwards: the first split
+  -- is always a guess, and a budget nobody can change is a budget everybody
+  -- ignores.
+  mass_budget_kg REAL,
   code TEXT,
   -- Share of the vehicle mass and build budget allocated to this subsystem,
   -- as a fraction (0.26 = 26%). Set by the Chief Engineer; mirrors the
@@ -122,6 +127,15 @@ CREATE TABLE IF NOT EXISTS parts (
   -- Target mass per unit assigned by the subsystem lead, against which the real
   -- measured weight_kg is checked. Both per unit, both kilograms.
   allocated_mass_kg REAL,
+  -- The unit the mass was ENTERED in. Storage is always kilograms; this only
+  -- controls how the number is shown back, so a supplier quote of 4.4 lb reads
+  -- as 4.4 lb instead of 1.996 kg. See lib/units.ts.
+  mass_unit TEXT NOT NULL DEFAULT 'kg' CHECK (mass_unit IN ('kg','g','lb','oz')),
+  -- Deliberately excused from the mass budget: fasteners, consumables,
+  -- anything bought by the bag. A lead sets this on purpose — the dashboard
+  -- never decides on their behalf that something is "basically a fastener",
+  -- because that is how a few hundred grams of hardware goes missing.
+  mass_not_applicable INTEGER NOT NULL DEFAULT 0,
   -- Optional finer grouping within the subsystem — Engine, Intake, Fuel System,
   -- Cooling and Exhaust are subteams of Powertrain, not subsystems of their own.
   -- Without this column, folding them into Powertrain would lose which area a

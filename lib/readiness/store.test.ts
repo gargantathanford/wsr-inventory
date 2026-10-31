@@ -52,12 +52,14 @@ function seed() {
   ).run("sm2", "s_chs", "u_lead2");
 
   // Two Powertrain parts, both bought and in hand, designs frozen.
+  // Masses included: a frozen part without one no longer satisfies the
+  // Design frozen gate, which is the point of that change.
   const p = db.prepare(
-    `INSERT INTO parts (id,part_name,subsystem_id,status,design_status,quantity_required,quantity_owned,supplier)
-     VALUES (?,?,?,?,?,1,1,?)`
+    `INSERT INTO parts (id,part_name,subsystem_id,status,design_status,quantity_required,quantity_owned,supplier,weight_kg)
+     VALUES (?,?,?,?,?,1,1,?,?)`
   );
-  p.run("p1", "Engine", "s_pwt", "INSTALLED", "FROZEN", "Honda");
-  p.run("p2", "ECU", "s_pwt", "INSTALLED", "FROZEN", "Haltech");
+  p.run("p1", "Engine", "s_pwt", "INSTALLED", "FROZEN", "Honda", 42);
+  p.run("p2", "ECU", "s_pwt", "INSTALLED", "FROZEN", "Haltech", 1.2);
 
   db.close();
   (globalThis as any).__wsrDb = undefined;
@@ -430,5 +432,106 @@ describe("the interface register end to end", () => {
     const res = store.agreeInterface("PWT_CHS_003", { id: "u_member", role: "TEAM_MEMBER" });
     assert.equal(res.ok, false);
     assert.match((res as any).reason, /leads of the two subsystems/);
+  });
+});
+
+describe("mass, through the database", () => {
+  function setMass(id: string, cols: Record<string, number | null>) {
+    const db = new Database(DB_FILE);
+    const sets = Object.keys(cols).map((k) => `${k} = @${k}`).join(", ");
+    db.prepare(`UPDATE parts SET ${sets} WHERE id = @id`).run({ ...cols, id });
+    db.close();
+    (globalThis as any).__wsrDb = undefined;
+  }
+
+  test("a frozen part with its mass cleared reopens the gate", () => {
+    setMass("p1", { weight_kg: null, allocated_mass_kg: null });
+    store.declarePartListComplete("s_pwt", LEAD, true);
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    store.approveGate("s_pwt", "SCOPED", CHIEF, null);
+    const g = store.getReadiness("s_pwt").gates.find((x) => x.gate === "DESIGN_FROZEN")!;
+    assert.equal(g.state, "OPEN");
+    assert.match(g.detail, /no mass recorded/);
+    assert.match(g.detail, /Engine/, "names the part, not just a count");
+  });
+
+  test("excusing it closes the gap without inventing a number", () => {
+    setMass("p1", { weight_kg: null, allocated_mass_kg: null, mass_not_applicable: 1 as any });
+    store.declarePartListComplete("s_pwt", LEAD, true);
+    store.endorseGate("s_pwt", "SCOPED", LEAD, null, null);
+    store.approveGate("s_pwt", "SCOPED", CHIEF, null);
+    assert.equal(store.getReadiness("s_pwt").gates.find((x) => x.gate === "DESIGN_FROZEN")!.state, "READY");
+  });
+
+  test("mass standing counts QUANTITY, unlike the gate", () => {
+    // The gate asks whether a mass is known — per unit. The budget asks what
+    // the car will weigh, so four uprights at 1.2 kg is 4.8 kg.
+    const db = new Database(DB_FILE);
+    db.prepare(
+      `INSERT INTO parts (id,part_name,subsystem_id,status,quantity_required,quantity_owned,weight_kg)
+       VALUES ('p3','Upright','s_pwt','OWNED',4,4,1.2)`
+    ).run();
+    db.close();
+    (globalThis as any).__wsrDb = undefined;
+
+    const m = store.getMassStanding("s_pwt");
+    // 42 + 1.2 + (1.2 x 4)
+    assert.ok(Math.abs(m.committedKg - 48) < 0.001, `got ${m.committedKg}`);
+  });
+
+  test("an excused part contributes nothing and is counted separately", () => {
+    setMass("p2", { mass_not_applicable: 1 as any });
+    const m = store.getMassStanding("s_pwt");
+    assert.equal(m.excusedParts, 1);
+    assert.ok(Math.abs(m.committedKg - 42) < 0.001);
+  });
+
+  test("a part with no mass at all is reported as unknown, not as zero", () => {
+    setMass("p2", { weight_kg: null, allocated_mass_kg: null });
+    const m = store.getMassStanding("s_pwt");
+    assert.equal(m.unknownParts, 1);
+  });
+
+  test("the budget is editable by the lead and refuses nonsense", () => {
+    assert.equal(store.setMassBudget("s_pwt", LEAD, 45).ok, true);
+    assert.equal(store.getMassStanding("s_pwt").budgetKg, 45);
+
+    const bad = store.setMassBudget("s_pwt", LEAD, -5);
+    assert.equal(bad.ok, false);
+    assert.match((bad as any).reason, /positive number of kilograms/);
+  });
+
+  test("a lead from another subsystem cannot change it", () => {
+    const res = store.setMassBudget("s_pwt", OTHER_LEAD, 45);
+    assert.equal(res.ok, false);
+    assert.match((res as any).reason, /lead or the Chief Engineer/);
+  });
+
+  test("over budget is reported, and binds once the gates get high enough", () => {
+    store.setMassBudget("s_pwt", CHIEF, 10);
+    const m = store.getMassStanding("s_pwt");
+    assert.ok(m.overBy !== null && m.overBy > 30, `43.2 kg against 10 kg, got overBy ${m.overBy}`);
+
+    // The ceiling is deliberately NOT reported while the gates are below it —
+    // announcing a cap of 92% to a subsystem sitting at 0% is noise. Close the
+    // gates and it starts binding.
+    assert.equal(store.getReadiness("s_pwt").ceiling, null, "nothing signed yet, so the cap is not the story");
+
+    store.declarePartListComplete("s_pwt", LEAD, true);
+    for (const g of ["SCOPED", "DESIGN_FROZEN", "RULES_CHECKED", "PROCURED"]) {
+      store.endorseGate("s_pwt", g as any, LEAD, "checked", null);
+      store.approveGate("s_pwt", g as any, CHIEF, null);
+    }
+    store.markNotApplicable("s_pwt", "MANUFACTURED", CHIEF, "everything in this subsystem is bought");
+    store.markNotApplicable("s_pwt", "INTERFACES_AGREED", CHIEF, "no interfaces recorded for this subsystem");
+    for (const g of ["INSTALLED", "TESTED"]) {
+      store.endorseGate("s_pwt", g as any, LEAD, "checked", null);
+      store.approveGate("s_pwt", g as any, CHIEF, null);
+    }
+
+    const r = store.getReadiness("s_pwt");
+    assert.ok(r.gatePct > 92, `gates alone reach ${r.gatePct}%`);
+    assert.equal(r.pct, 92, "capped by the mass overage");
+    assert.match(r.ceiling!.reason, /against a 10\.0 kg budget/);
   });
 });

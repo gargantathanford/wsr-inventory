@@ -206,6 +206,32 @@ limits are refused with an explanation rather than a number: 2x ceiling, 14
 hours maximum, no overlaps, and **the daily cap still applies afterwards** — a
 window is not a way around it.
 
+## 7a. Mass: units, budgets and the freeze gate
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-mass.ts
+docker compose run --rm maint npx tsx scripts/migrate-mass.ts --commit
+```
+
+**Expect** `3 pending` — `parts.mass_unit`, `parts.mass_not_applicable`,
+`subsystems.mass_budget_kg` — and a proposed budget split printed before it
+writes anything.
+
+The split is seeded from `target_vehicle_mass_lb` (500 lb = 226.8 kg) using the
+workbook's shares. It is a STARTING POINT. Every value is editable on the
+subsystem page, and **re-running never overwrites an edited one**.
+
+What changes for the team:
+
+- Masses can be entered in **kg, g, lb or oz**. Storage is always kilograms;
+  the unit only controls how the number is shown back. Switching the dropdown
+  converts what is already typed rather than reinterpreting it.
+- A part cannot be marked **FROZEN** without a mass — measured, allocated, or
+  an explicit "mass not applicable" for fasteners and consumables. The same
+  rule gates the subsystem's Design frozen gate.
+- A subsystem over its mass budget is **capped at 92%** however many gates are
+  closed.
+
 ## 7b. Gate-based completeness
 
 ```bash
@@ -397,6 +423,11 @@ range beneath it.
 percentages, with a line beneath saying how many subsystems are fully signed
 off, how many are capped by an open critical interface, and how many closed
 gates no longer match their data.
+
+**Mass panel** (any subsystem page) — committed mass against budget, split
+into weighed and still-estimated. Create a part with mass in **lb** and confirm
+the panel shows the converted kg. Set the budget below the committed mass and
+the subsystem should cap at 92%.
 
 **Completeness panel** (any subsystem page) — eight gates, each with a state
 and a sentence saying what it is waiting on. Checks:

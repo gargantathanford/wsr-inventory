@@ -48,6 +48,8 @@ const EDITABLE_FIELDS = [
   "driving_target",
   "acceptance_criterion",
   "sponsor_ask",
+  "mass_unit",
+  "mass_not_applicable",
   "unit_of_measure",
   "allocated_mass_kg",
   "subteam_id"

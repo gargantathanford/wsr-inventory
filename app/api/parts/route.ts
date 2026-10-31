@@ -48,6 +48,9 @@ const PartInput = z.object({
   acceptance_criterion: z.string().max(1000).optional().nullable(),
   // An empty select posts "", which is not a valid enum value — treat it as unset.
   sponsor_ask: z.preprocess((v) => (v === "" || v == null ? null : v), z.enum(SPONSOR_ASKS).nullable()).optional(),
+  // Display preference only — storage is always kilograms. See lib/units.ts.
+  mass_unit: z.enum(["kg", "g", "lb", "oz"]).default("kg"),
+  mass_not_applicable: z.preprocess((v) => v === true || v === "true" || v === 1, z.boolean()).default(false),
   unit_of_measure: z.string().max(16).optional().nullable(),
   allocated_mass_kg: z.coerce.number().optional().nullable(),
   weight_kg: z.coerce.number().optional().nullable(),
@@ -108,6 +111,7 @@ export async function POST(req: NextRequest) {
       purchase_status, approval_status, created_at, updated_at,
       design_status, estimated_cost_low, estimated_cost_high, governing_rule, driving_target,
       acceptance_criterion, sponsor_ask, unit_of_measure, allocated_mass_kg, weight_kg,
+      mass_unit, mass_not_applicable,
       required_by_date, subteam_id
     ) VALUES (@id, @part_name, @part_number, @manufacturer, @category, @subsystem_id, @description,
       @quantity_required, @quantity_owned, @status, @importance, @priority_score,
@@ -115,6 +119,7 @@ export async function POST(req: NextRequest) {
       @purchase_status, @approval_status, @created_at, @updated_at,
       @design_status, @estimated_cost_low, @estimated_cost_high, @governing_rule, @driving_target,
       @acceptance_criterion, @sponsor_ask, @unit_of_measure, @allocated_mass_kg, @weight_kg,
+      @mass_unit, @mass_not_applicable,
       @required_by_date, @subteam_id)`
   ).run({
     id,
@@ -146,6 +151,8 @@ export async function POST(req: NextRequest) {
     driving_target: data.driving_target ?? null,
     acceptance_criterion: data.acceptance_criterion ?? null,
     sponsor_ask: data.sponsor_ask ?? null,
+    mass_unit: data.mass_unit,
+    mass_not_applicable: data.mass_not_applicable ? 1 : 0,
     unit_of_measure: data.unit_of_measure ?? null,
     allocated_mass_kg: data.allocated_mass_kg ?? null,
     weight_kg: data.weight_kg ?? null,

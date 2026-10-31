@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DESIGN_STATUSES, SPONSOR_ASKS, UNITS, checkPartGates } from "@/lib/partRules";
+import { MASS_UNITS, MASS_UNIT_LABEL, parseMass, fromKg, type MassUnit } from "@/lib/units";
 
 const STATUSES = [
   "NEEDED",
@@ -57,6 +58,10 @@ export function PartForm({ subsystems }: { subsystems: Subsystem[] }) {
   const [governingRule, setGoverningRule] = useState("");
   const [allocMass, setAllocMass] = useState("");
   const [weight, setWeight] = useState("");
+  // One unit for both mass fields on a part. Two different units on the same
+  // part would be a trap, and nobody allocates in pounds then weighs in grams.
+  const [massUnit, setMassUnit] = useState<MassUnit>("kg");
+  const [massNA, setMassNA] = useState(false);
   const [costLow, setCostLow] = useState("");
   const [costHigh, setCostHigh] = useState("");
   const [qty, setQty] = useState("1");
@@ -96,10 +101,13 @@ export function PartForm({ subsystems }: { subsystems: Subsystem[] }) {
         acceptance_criterion: acceptance,
         cited_rule_count: 0,
         governing_rule: governingRule,
-        allocated_mass_kg: allocMass ? Number(allocMass) : null,
-        weight_kg: weight ? Number(weight) : null
+        // Converted to kilograms HERE, once. Everything downstream — the
+        // budget, the freeze gate, the rollups — only ever sees kg.
+        allocated_mass_kg: massNA ? null : parseMass(allocMass, massUnit),
+        weight_kg: massNA ? null : parseMass(weight, massUnit),
+        mass_not_applicable: massNA
       }),
-    [designStatus, acceptance, governingRule, allocMass, weight]
+    [designStatus, acceptance, governingRule, allocMass, weight, massUnit, massNA]
   );
 
   const lineLow = costLow && qty ? Number(costLow) * Number(qty) : null;
@@ -118,6 +126,19 @@ export function PartForm({ subsystems }: { subsystems: Subsystem[] }) {
     // as absent rather than as an empty string the coercion would reject.
     const payload: Record<string, unknown> = {};
     for (const [k, v] of fd.entries()) if (v !== "") payload[k] = v;
+
+    // Mass is overwritten from state rather than taken from the form fields,
+    // because the fields hold the value in the CHOSEN unit and the database
+    // only ever stores kilograms. Letting the raw field through would store
+    // "4.4" from a pounds entry as 4.4 kg — the exact bug this is fixing.
+    payload.mass_unit = massUnit;
+    payload.mass_not_applicable = massNA;
+    const allocKg = massNA ? null : parseMass(allocMass, massUnit);
+    const weightKg = massNA ? null : parseMass(weight, massUnit);
+    if (allocKg === null) delete payload.allocated_mass_kg;
+    else payload.allocated_mass_kg = allocKg;
+    if (weightKg === null) delete payload.weight_kg;
+    else payload.weight_kg = weightKg;
 
     const res = await fetch("/api/parts", {
       method: "POST",
@@ -358,30 +379,93 @@ export function PartForm({ subsystems }: { subsystems: Subsystem[] }) {
         open={open.mass}
         onToggle={() => toggle("mass")}
       >
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="Allocated mass, kg per unit" help="The target the lead assigns this line before a part is chosen.">
-            <input
+        {/* Unit first, because it governs both numbers below it. Suppliers
+            quote in whatever they like — the WSR tubing came back in pounds —
+            and a column named _kg that accepts a bare number turns that into a
+            2.2x error on the one figure the mass budget depends on. */}
+        <div className="flex items-end gap-4 flex-wrap mb-4">
+          <Field label="Units" help="Stored in kilograms whatever you pick. Change it and the numbers convert.">
+            <select
               className="input"
-              type="number"
-              step="0.001"
-              min={0}
-              name="allocated_mass_kg"
-              value={allocMass}
-              onChange={(e) => setAllocMass(e.target.value)}
-            />
+              value={massUnit}
+              onChange={(e) => {
+                const next = e.target.value as MassUnit;
+                // Convert what is already typed rather than reinterpreting it.
+                // Switching kg to lb must not silently turn 2 kg into 2 lb.
+                const conv = (v: string) => {
+                  const kg = parseMass(v, massUnit);
+                  return kg === null ? "" : String(Number(fromKg(kg, next).toFixed(4)));
+                };
+                setAllocMass(conv(allocMass));
+                setWeight(conv(weight));
+                setMassUnit(next);
+              }}
+            >
+              {MASS_UNITS.map((u) => (
+                <option key={u} value={u}>
+                  {u} — {MASS_UNIT_LABEL[u]}
+                </option>
+              ))}
+            </select>
           </Field>
-          <Field label="Measured mass, kg per unit" help="What it actually weighs. Weigh it; do not trust the datasheet.">
+          <label className="flex items-start gap-2 text-xs text-graphite-300 pb-2 max-w-sm cursor-pointer">
             <input
-              className="input"
-              type="number"
-              step="0.001"
-              min={0}
-              name="weight_kg"
-              value={weight}
-              onChange={(e) => setWeight(e.target.value)}
+              type="checkbox"
+              checked={massNA}
+              onChange={(e) => setMassNA(e.target.checked)}
+              className="mt-0.5"
             />
-          </Field>
+            <span>
+              Mass not applicable
+              <span className="block text-[11px] text-graphite-600 leading-relaxed mt-0.5">
+                For fasteners, consumables, anything bought by the bag. Excuses this line from the
+                mass budget and from the design-freeze gate. Use it deliberately — an excused
+                bracket is how a few hundred grams goes missing.
+              </span>
+            </span>
+          </label>
         </div>
+
+        {!massNA && (
+          <div className="grid sm:grid-cols-2 gap-4">
+            <Field
+              label={`Allocated mass, ${massUnit} per unit`}
+              help="The target the lead assigns this line before a part is chosen."
+            >
+              <input
+                className="input"
+                type="number"
+                step="0.001"
+                min={0}
+                name="allocated_mass_kg"
+                value={allocMass}
+                onChange={(e) => setAllocMass(e.target.value)}
+              />
+            </Field>
+            <Field
+              label={`Measured mass, ${massUnit} per unit`}
+              help="What it actually weighs. Weigh it; do not trust the datasheet."
+            >
+              <input
+                className="input"
+                type="number"
+                step="0.001"
+                min={0}
+                name="weight_kg"
+                value={weight}
+                onChange={(e) => setWeight(e.target.value)}
+              />
+            </Field>
+            {massUnit !== "kg" && (allocMass || weight) && (
+              <p className="sm:col-span-2 font-mono text-[11px] text-graphite-500">
+                stored as{" "}
+                {allocMass ? `${(parseMass(allocMass, massUnit) ?? 0).toFixed(3)} kg allocated` : ""}
+                {allocMass && weight ? " · " : ""}
+                {weight ? `${(parseMass(weight, massUnit) ?? 0).toFixed(3)} kg measured` : ""}
+              </p>
+            )}
+          </div>
+        )}
       </Section>
 
       {/* ---- procurement ---- */}

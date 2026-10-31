@@ -64,6 +64,8 @@ export interface SubsystemFacts {
   parts: PartFacts[];
   /** Subsystem-level test records with evidence attached. */
   testsWithEvidence: number;
+  /** This subsystem's share of the vehicle mass target, kilograms. */
+  massBudgetKg?: number | null;
   /**
    * Every interface this subsystem is a party to, on either side.
    *
@@ -88,6 +90,14 @@ export interface InterfaceFacts {
 
 export interface PartFacts {
   id: string;
+  /** For the message, so an open gate names the parts rather than a count. */
+  name?: string;
+  /** Measured or estimated mass, kilograms. Null means nobody has recorded one. */
+  massKg?: number | null;
+  /** The lead's target for this part, kilograms. */
+  allocatedMassKg?: number | null;
+  /** Deliberately excused: fasteners, consumables, anything bought by the bag. */
+  massNotApplicable?: boolean;
   /** PLACEHOLDER | CANDIDATE | QUOTED | SELECTED | FROZEN */
   designStatus: string;
   /** OWNED | PARTIALLY_OWNED | NEEDED | ORDERED | BACKORDERED | MANUFACTURING |
@@ -99,6 +109,23 @@ export interface PartFacts {
   isManufactured: boolean;
   /** A part that is not fitted to the car — a spare, a tool, a consumable. */
   isFitted: boolean;
+}
+
+/** Either a measured mass or a lead's allocation counts as knowing it. */
+function hasMass(p: PartFacts): boolean {
+  return (
+    (typeof p.massKg === "number" && Number.isFinite(p.massKg)) ||
+    (typeof p.allocatedMassKg === "number" && Number.isFinite(p.allocatedMassKg))
+  );
+}
+
+/** Total mass a subsystem is committed to, counting excused parts as nothing. */
+export function committedMassKg(f: SubsystemFacts): number {
+  return live(f).reduce((sum, p) => {
+    if (p.massNotApplicable) return sum;
+    const m = typeof p.massKg === "number" ? p.massKg : p.allocatedMassKg;
+    return sum + (typeof m === "number" && Number.isFinite(m) ? m : 0);
+  }, 0);
 }
 
 /** A part nobody needs any more must not hold a gate open forever. */
@@ -168,15 +195,21 @@ export const GATES: GateDef[] = [
     id: "DESIGN_FROZEN",
     label: "Design frozen",
     means:
-      "Every part has a chosen design that will not change without a change request. " +
-      "Freezing is what makes ordering and manufacturing safe.",
+      "Every part has a chosen design that will not change without a change request, AND a mass. " +
+      "Freezing is what makes ordering and manufacturing safe — and a design frozen without a mass " +
+      "number is how a team ends up forty kilos over target with every subsystem reporting green.",
     after: ["SCOPED"],
     weight: 1,
     requiresEvidence: false,
     derive: (f) => {
       const parts = live(f);
       if (parts.length === 0) return "nothing-to-judge";
-      return parts.every((p) => p.designStatus === "FROZEN") ? "satisfied" : "unsatisfied";
+      const frozen = parts.every((p) => p.designStatus === "FROZEN");
+      // A part needs a mass OR an explicit excusal. Not both, and not neither:
+      // "no mass recorded" and "weighs nothing worth tracking" are different
+      // facts, and only a lead can say which applies.
+      const massed = parts.every((p) => p.massNotApplicable || hasMass(p));
+      return frozen && massed ? "satisfied" : "unsatisfied";
     }
   },
   {
@@ -484,8 +517,18 @@ function explainOpen(def: GateDef, f: SubsystemFacts): string {
     case "SCOPED":
       return `${parts.length} part${parts.length === 1 ? "" : "s"} entered — a lead must confirm the list is complete`;
     case "DESIGN_FROZEN": {
-      const n = parts.filter((p) => p.designStatus !== "FROZEN").length;
-      return `${n} of ${parts.length} not frozen yet`;
+      const unfrozen = parts.filter((p) => p.designStatus !== "FROZEN");
+      const unmassed = parts.filter((p) => !p.massNotApplicable && !hasMass(p));
+      const bits: string[] = [];
+      if (unfrozen.length) bits.push(`${unfrozen.length} of ${parts.length} not frozen`);
+      if (unmassed.length) {
+        const names = unmassed.slice(0, 3).map((p) => p.name).filter(Boolean).join(", ");
+        bits.push(
+          `${unmassed.length} with no mass recorded` +
+            (names ? ` (${names}${unmassed.length > 3 ? ", …" : ""})` : "")
+        );
+      }
+      return bits.join("; ") || "ready";
     }
     case "RULES_CHECKED":
       return "No rule clauses cited on any part yet";
@@ -577,6 +620,28 @@ export interface Readiness {
  * since an interface is shared and a gate is per-subsystem.
  */
 export const CEILINGS: Array<{ cap: number; test: (f: SubsystemFacts) => string | null }> = [
+  {
+    // Over the mass budget. Capped rather than deducted, for the same reason
+    // as the interface ceiling: a subsystem 30% over its mass allocation is
+    // not "92% done", it has a problem that has to be solved before anybody
+    // calls it finished. Mass is the budget an FSAE team blows most reliably,
+    // and it blows it quietly — every part individually reasonable.
+    cap: 92,
+    test: (f) => {
+      const budget = f.massBudgetKg;
+      if (!budget || budget <= 0) return null;
+      const committed = committedMassKg(f);
+      if (committed <= budget) return null;
+      const over = committed - budget;
+      const pct = Math.round((over / budget) * 100);
+      return (
+        `Committed mass is ${committed.toFixed(1)} kg against a ${budget.toFixed(1)} kg budget — ` +
+        `${over.toFixed(1)} kg over, ${pct}%. Either parts come out, lighter options get chosen, or ` +
+        `the budget gets renegotiated against another subsystem. All three are decisions somebody has ` +
+        `to make out loud.`
+      );
+    }
+  },
   {
     cap: 84,
     test: (f) => {

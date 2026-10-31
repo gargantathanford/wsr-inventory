@@ -34,7 +34,11 @@ export interface PartGateInput {
   governing_rule?: string | null;
   allocated_mass_kg?: number | null;
   weight_kg?: number | null;
+  /** Deliberately excused from the mass budget — fasteners, consumables. */
+  mass_not_applicable?: boolean | null;
   quantity_required?: number | null;
+  /** Shown in the message so a lead knows which part is being complained about. */
+  part_name?: string | null;
 }
 
 export interface GateResult {
@@ -70,16 +74,39 @@ export function checkPartGates(input: PartGateInput): GateResult {
     }
   }
 
-  // Mass is advisory: being over allocation is a real engineering fact a lead
-  // may knowingly accept, not a data error.
   const alloc = input.allocated_mass_kg;
   const actual = input.weight_kg;
-  if (alloc != null && actual != null && actual > alloc) {
+  const excused = !!input.mass_not_applicable;
+  const knowsMass = excused || alloc != null || actual != null;
+
+  // FREEZING without a mass is an ERROR, matching the subsystem's Design
+  // frozen gate. The two used to disagree: a part could be frozen with no mass
+  // at all, and then the subsystem gate refused to close for a reason that was
+  // invisible from the part. Freezing says "this is what we are building" —
+  // not knowing what it weighs is not compatible with that.
+  //
+  // SELECTED stays advisory on purpose. Choosing a candidate before weighing
+  // it is a normal order of operations; committing to it is not.
+  if (status === "FROZEN" && !knowsMass) {
+    errors.push(
+      `A frozen part needs a mass — measured, or the lead's allocation. If this is a fastener or a ` +
+        `consumable, tick "mass not applicable" instead; that excuses it deliberately rather than ` +
+        `leaving a gap in the subsystem's mass budget.`
+    );
+  }
+
+  // Over allocation is a real engineering fact a lead may knowingly accept,
+  // not a data error. It warns, and the subsystem ceiling makes the aggregate
+  // impossible to ignore.
+  if (!excused && alloc != null && actual != null && actual > alloc) {
     const over = (((actual - alloc) / alloc) * 100).toFixed(0);
     warnings.push(`Measured mass is ${over}% over its allocation (${actual} kg vs ${alloc} kg allocated).`);
   }
-  if (committed && alloc == null) {
-    warnings.push(`No mass allocation set, so this part is not counted against the subsystem's mass budget.`);
+  if (status === "SELECTED" && !knowsMass) {
+    warnings.push(
+      `No mass yet, so this part is not counted against the subsystem's mass budget. It will be ` +
+        `required before you can freeze it.`
+    );
   }
 
   return { errors, warnings };
