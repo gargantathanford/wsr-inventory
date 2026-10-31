@@ -13,6 +13,9 @@ import { PartsTable } from "@/components/PartsTable";
 import { ProgressBar } from "@/components/ProgressBar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { GatePanel } from "@/components/readiness/GatePanel";
+import { getReadiness } from "@/lib/readiness/store";
+import { getSession } from "@/lib/auth";
 
 export default async function SubsystemDetailPage({ params }: { params: { slug: string } }) {
   const subsystem = getSubsystemBySlug(params.slug);
@@ -24,7 +27,15 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
   const docs = getSubsystemDocuments(subsystem.id);
 
   const owned = parts.filter((p) => ["OWNED", "AVAILABLE_FOR_INSTALLATION", "INSTALLED"].includes(p.status)).length;
-  const pct = parts.length > 0 ? Math.round((owned / parts.length) * 100) : 0;
+
+  // Completeness is gate-based now. `owned / parts.length` is still computed
+  // above but it is PROCUREMENT progress and is labelled as such — presenting
+  // it as "completion" is the bug this release fixes.
+  const readiness = getReadiness(subsystem.id);
+  const user = await getSession();
+  const isLead = members.some((m: any) => m.user_id === user?.id && m.role_in_subsystem === "LEADER");
+  const canApprove = user?.role === "ADMIN" || user?.role === "CHIEF_ENGINEER";
+  const canEndorse = canApprove || isLead;
   // Unit price x quantity required — see lineCost in lib/queries.
   const totalCost = parts.reduce((s, p) => s + lineCost(p), 0);
 
@@ -49,14 +60,28 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
 
       <div className="grid sm:grid-cols-4 gap-4">
         <div className="panel p-5">
-          <div className="data-label">COMPLETION</div>
-          <div className="stat-figure mt-1">{pct}%</div>
-          <ProgressBar pct={pct} colorClass={pct >= 75 ? "bg-telemetry-green" : pct >= 45 ? "bg-telemetry-amber" : "bg-signal"} />
+          <div className="data-label">COMPLETENESS</div>
+          <div className="stat-figure mt-1">{readiness.pct}%</div>
+          <ProgressBar
+            pct={readiness.pct}
+            colorClass={
+              readiness.pct >= 75 ? "bg-telemetry-green" : readiness.pct >= 45 ? "bg-telemetry-amber" : "bg-signal"
+            }
+          />
+          <div className="text-xs font-mono text-graphite-500 mt-1">
+            {readiness.passed}/{readiness.applicable} gates
+            {readiness.ceiling && ` · capped at ${readiness.ceiling.cap}%`}
+          </div>
         </div>
         <div className="panel p-5">
-          <div className="data-label">PARTS</div>
-          <div className="stat-figure mt-1">{parts.length}</div>
-          <div className="text-xs font-mono text-graphite-500 mt-1">{owned} owned</div>
+          {/* Named for what it actually measures. This used to be labelled
+              COMPLETION, which is what made one owned part read as a finished
+              subsystem. */}
+          <div className="data-label">PARTS IN HAND</div>
+          <div className="stat-figure mt-1">
+            {owned}/{parts.length}
+          </div>
+          <div className="text-xs font-mono text-graphite-500 mt-1">procurement only</div>
         </div>
         <div className="panel p-5">
           <div className="data-label">EST. COST</div>
@@ -70,6 +95,14 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
           </div>
         </div>
       </div>
+
+      <GatePanel
+        subsystemId={subsystem.id}
+        readiness={readiness}
+        canEndorse={canEndorse}
+        canApprove={canApprove}
+        partListDeclaredComplete={!!(subsystem as any).part_list_declared_complete}
+      />
 
       <section>
         <h2 className="text-sm font-medium text-graphite-200 mb-3">Parts</h2>

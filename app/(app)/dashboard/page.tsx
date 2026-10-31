@@ -7,17 +7,20 @@ import {
   getCriticalProcurementItems,
   getBlockingComponents,
   getMissingTools,
-  getReadinessByCode
 } from "@/lib/queries";
 import { statusLabel } from "@/lib/scoring";
 import { StatCard } from "@/components/StatCard";
+import { getReadinessByCode, getVehicleReadiness } from "@/lib/readiness/store";
 import { ProgressBar } from "@/components/ProgressBar";
 import { StatusDonut } from "@/components/charts/StatusDonut";
 import { ImportanceBadge } from "@/components/StatusBadge";
 import { BuildSchematic } from "@/components/BuildSchematic";
 
 export default async function DashboardPage() {
+  // Gate-based, from lib/readiness. The old getReadinessByCode counted owned
+  // parts, which is why one owned part painted a subsystem green.
   const readinessByCode = getReadinessByCode();
+  const vehicle = getVehicleReadiness();
   const user = await getSession();
   const stats = getGlobalStats();
   const breakdown = getStatusBreakdown();
@@ -27,9 +30,9 @@ export default async function DashboardPage() {
   const missingTools = getMissingTools();
 
   const readinessColor =
-    stats.readiness >= 75 ? "text-telemetry-green" : stats.readiness >= 45 ? "text-telemetry-amber" : "text-telemetry-red";
+    vehicle.pct >= 75 ? "text-telemetry-green" : vehicle.pct >= 45 ? "text-telemetry-amber" : "text-telemetry-red";
   const readinessBar =
-    stats.readiness >= 75 ? "bg-telemetry-green" : stats.readiness >= 45 ? "bg-telemetry-amber" : "bg-signal";
+    vehicle.pct >= 75 ? "bg-telemetry-green" : vehicle.pct >= 45 ? "bg-telemetry-amber" : "bg-signal";
 
   return (
     <div className="p-6 md:p-8 max-w-[1400px] mx-auto space-y-8">
@@ -45,12 +48,20 @@ export default async function DashboardPage() {
         <div className="shrink-0">
           <div className="data-label">PROJECT READINESS</div>
           <div className={`font-mono text-6xl md:text-7xl font-bold tabular-nums mt-1 ${readinessColor}`}>
-            {stats.readiness}
+            {vehicle.pct}
             <span className="text-3xl text-graphite-500">%</span>
           </div>
         </div>
         <div className="flex-1 w-full">
-          <ProgressBar pct={stats.readiness} colorClass={readinessBar} height="h-2.5" />
+          <ProgressBar pct={vehicle.pct} colorClass={readinessBar} height="h-2.5" />
+          <p className="font-mono text-[11px] text-graphite-500 mt-2">
+            {vehicle.fullyClosed} of {vehicle.subsystems} subsystems fully signed off
+            {vehicle.capped > 0 && ` · ${vehicle.capped} capped by an open critical interface`}
+            {vehicle.stale > 0 &&
+              (vehicle.stale === 1
+                ? " · 1 closed gate no longer matches the data"
+                : ` · ${vehicle.stale} closed gates no longer match the data`)}
+          </p>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mt-6">
             <MiniStat label="TOTAL PARTS" value={stats.total} />
             <MiniStat label="OWNED" value={stats.owned} accent="text-telemetry-green" />

@@ -450,3 +450,34 @@ export function agreeInterface(
 
   return { ok: true };
 }
+
+/**
+ * Vehicle-wide readiness: the mean of every subsystem's gate percentage.
+ *
+ * A mean of percentages, NOT total gates closed over total gates. Weighting by
+ * gate count would let a subsystem with many parts dominate the headline, which
+ * is the same category of mistake as the part-count metric this replaces: the
+ * number would move when somebody typed, not when work got done.
+ *
+ * Subsystems with no parts are included, at 0%. Excluding them would make the
+ * vehicle look more finished for every subsystem nobody had started — exactly
+ * backwards.
+ */
+export function getVehicleReadiness(): {
+  pct: number;
+  subsystems: number;
+  fullyClosed: number;
+  capped: number;
+  stale: number;
+} {
+  const all = getAllReadiness();
+  if (all.length === 0) return { pct: 0, subsystems: 0, fullyClosed: 0, capped: 0, stale: 0 };
+  const sum = all.reduce((s, r) => s + r.readiness.pct, 0);
+  return {
+    pct: Math.round(sum / all.length),
+    subsystems: all.length,
+    fullyClosed: all.filter((r) => r.readiness.pct === 100).length,
+    capped: all.filter((r) => r.readiness.ceiling !== null).length,
+    stale: all.reduce((s, r) => s + r.readiness.stale.length, 0)
+  };
+}

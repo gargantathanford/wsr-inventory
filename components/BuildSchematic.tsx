@@ -3,12 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
+/**
+ * The shape the gate store returns. The schematic now colours by GATE
+ * completeness, not by owned-part count — a subsystem with one owned part used
+ * to paint green here, which is how Jonathan spotted the metric was wrong.
+ */
 export interface SubsystemReadiness {
   name: string;
   slug: string;
-  pct: number;
   partCount: number;
-  ownedCount: number;
+  readiness: {
+    pct: number;
+    gatePct: number;
+    passed: number;
+    applicable: number;
+    ceiling: { cap: number; reason: string } | null;
+    stale: unknown[];
+  };
 }
 
 /**
@@ -30,6 +41,50 @@ export interface SubsystemReadiness {
  */
 
 const REGION_ORDER = ["CHS", "SUS", "WHE", "BRK", "STE", "PWT", "CVT", "ELE", "ERG", "AER"] as const;
+
+/**
+ * An explicit area to point at, per region.
+ *
+ * A fat transparent stroke was the first attempt and it was not enough: it only
+ * catches on the line itself, so picking out a wishbone still meant hitting a
+ * few pixels. Jonathan's words were "too tough to highlight individual
+ * sections", and he was right.
+ *
+ * So each region gets real rectangles covering where it lives. Rectangles
+ * rather than exact outlines because a target you can find beats a target that
+ * traces the drawing: nobody is trying to click the precise edge of a brake
+ * disc, they are trying to click "the brakes".
+ *
+ * Regions overlap — the chassis tub runs under everything — so they are painted
+ * in REGION_ORDER and the later ones win the pointer. Hence the chassis is
+ * first in that list and the small, specific items are last.
+ */
+const HIT: Record<string, Array<[number, number, number, number]>> = {
+  // [x, y, width, height] in viewBox units.
+  //
+  // These rectangles must not overlap each other, which is the part that took
+  // measuring rather than guessing: an earlier set put the wheel targets on top
+  // of the brake discs and the chassis target under the cockpit, so pointing at
+  // a wheel selected Brakes and pointing at the middle of the car selected
+  // Ergonomics. Verified by asking the browser what answers at the centre of
+  // every rectangle — see the hit test in the commit message.
+  //
+  // The chassis gets the nose bay only: its tub runs underneath every other
+  // region, so a rectangle covering it would swallow half the car. The rest of
+  // the chassis is pickable along its outline, via the stroke target below.
+  CHS: [[82, 122, 74, 56]],
+  AER: [[52, 70, 26, 160], [262, 86, 120, 26], [262, 188, 120, 26], [584, 84, 44, 132]],
+  SUS: [[150, 56, 70, 76], [150, 168, 70, 76], [466, 58, 100, 74], [466, 168, 100, 74]],
+  // Deliberately shallower than the tyres are drawn, to clear the brake discs
+  // that sit inboard at each wheel centre.
+  WHE: [[155, 25, 70, 14], [155, 257, 70, 14], [483, 29, 76, 14], [483, 253, 76, 14]],
+  BRK: [[176, 41, 28, 28], [176, 231, 28, 28], [506, 46, 30, 30], [506, 224, 30, 30], [242, 124, 20, 52]],
+  STE: [[164, 134, 64, 32], [284, 134, 16, 32]],
+  PWT: [[412, 108, 100, 74]],
+  CVT: [[500, 128, 44, 44], [514, 62, 14, 180]],
+  ELE: [[394, 126, 38, 48], [556, 108, 16, 84]],
+  ERG: [[262, 126, 116, 48]]
+};
 type Code = (typeof REGION_ORDER)[number];
 
 const REGION_LABEL: Record<Code, string> = {
@@ -52,8 +107,12 @@ const REGION_LABEL: Record<Code, string> = {
  */
 function tone(r: SubsystemReadiness | undefined): { stroke: string; fill: string; state: string } {
   if (!r || r.partCount === 0) return { stroke: "#123843", fill: "none", state: "no parts entered" };
-  if (r.pct === 0) return { stroke: "#2E5C67", fill: "none", state: "none owned" };
-  if (r.pct >= 100) return { stroke: "#2ED573", fill: "rgba(46,213,115,0.10)", state: "complete" };
+  const pct = r.readiness.pct;
+  if (pct === 0) return { stroke: "#2E5C67", fill: "none", state: "no gates closed" };
+  if (pct >= 100) return { stroke: "#2ED573", fill: "rgba(46,213,115,0.10)", state: "every gate closed" };
+  // A capped subsystem is amber rather than orange: its own work may be done
+  // and something shared is holding it. Different problem, different colour.
+  if (r.readiness.ceiling) return { stroke: "#FFB020", fill: "rgba(255,176,32,0.08)", state: "capped" };
   return { stroke: "#FF9900", fill: "rgba(255,153,0,0.08)", state: "in progress" };
 }
 
@@ -74,30 +133,65 @@ export function BuildSchematic({ readiness }: { readiness: Record<string, Subsys
 
   const info = hovered ? readiness[hovered] : undefined;
 
+  /**
+   * One subsystem region.
+   *
+   * Wrapped in a link, so clicking any part of the car goes to that subsystem —
+   * the readout underneath was a link before, which meant you had to hover the
+   * right shape and then travel to a different element to click it.
+   *
+   * `hitArea` is an invisible stroke many times wider than the drawn one. Thin
+   * SVG strokes are a 2px target, which is unusable with a mouse and hopeless
+   * on a phone; `vector-effect: non-scaling-stroke` keeps that target the same
+   * size on screen however the viewBox scales. The visible drawing stays thin.
+   */
   const region = (code: Code, children: React.ReactNode, delayIndex: number) => {
     const r = readiness[code];
     const t = tone(r);
     const dim = hovered && hovered !== code;
+    const label = r
+      ? `${REGION_LABEL[code]}: ${r.readiness.passed} of ${r.readiness.applicable} gates closed, ${r.readiness.pct}%`
+      : `${REGION_LABEL[code]}: no parts entered`;
+
     return (
-      <g
+      <a
         key={code}
+        href={r ? `/subsystems/${r.slug}` : "/subsystems"}
         role="listitem"
-        aria-label={`${REGION_LABEL[code]}: ${r ? `${r.ownedCount} of ${r.partCount} owned` : "no parts entered"}`}
+        aria-label={label}
         onMouseEnter={() => setHovered(code)}
         onMouseLeave={() => setHovered(null)}
         onFocus={() => setHovered(code)}
         onBlur={() => setHovered(null)}
         style={{
-          stroke: t.stroke,
-          fill: t.fill,
           opacity: drawn ? (dim ? 0.28 : 1) : 0,
           transition: `opacity 420ms ease ${drawn ? delayIndex * 85 : 0}ms`,
           cursor: "pointer"
         }}
-        className="[&_*]:transition-[stroke,fill] [&_*]:duration-300"
       >
-        {children}
-      </g>
+        {/* The grab area: real rectangles, plus a fat transparent stroke along
+            the drawing itself so the shape is pickable where it extends beyond
+            them. Invisible, and `aria-hidden` so a screen reader hears the
+            region once, from the link, rather than once per rectangle. */}
+        <g aria-hidden style={{ pointerEvents: "all", fill: "transparent", stroke: "none" }}>
+          {(HIT[code] ?? []).map(([x, y, w, h], i) => (
+            <rect key={i} x={x} y={y} width={w} height={h} />
+          ))}
+        </g>
+        <g
+          aria-hidden
+          style={{ stroke: "transparent", strokeWidth: 14, fill: "none", pointerEvents: "stroke" }}
+        >
+          {children}
+        </g>
+        {/* The drawing itself. */}
+        <g
+          style={{ stroke: t.stroke, fill: t.fill, pointerEvents: "none" }}
+          className="[&_*]:transition-[stroke,fill] [&_*]:duration-300"
+        >
+          {children}
+        </g>
+      </a>
     );
   };
 
@@ -254,24 +348,37 @@ export function BuildSchematic({ readiness }: { readiness: Record<string, Subsys
       <div className="mt-3 min-h-[2.75rem] flex items-start justify-between gap-4 border-t border-graphite-800 pt-3">
         {hovered && info ? (
           <>
-            <div>
+            <div className="min-w-0">
               <Link href={`/subsystems/${info.slug}`} className="text-sm text-graphite-100 hover:text-signal">
                 {info.name}
               </Link>
               <div className="font-mono text-[11px] text-graphite-400 mt-0.5">
                 {info.partCount === 0
                   ? "no parts entered yet"
-                  : `${info.ownedCount} of ${info.partCount} owned · ${info.pct}%`}
+                  : `${info.readiness.passed} of ${info.readiness.applicable} gates closed`}
               </div>
+              {info.readiness.ceiling && (
+                <div className="font-mono text-[10px] text-telemetry-amber mt-0.5">
+                  capped at {info.readiness.ceiling.cap}% — gates alone would say {info.readiness.gatePct}%
+                </div>
+              )}
+              {info.readiness.stale.length > 0 && (
+                <div className="font-mono text-[10px] text-telemetry-red mt-0.5">
+                  {info.readiness.stale.length === 1
+                    ? "1 closed gate no longer matches the data"
+                    : `${info.readiness.stale.length} closed gates no longer match the data`}
+                </div>
+              )}
             </div>
-            <div className="font-mono text-2xl tabular-nums" style={{ color: tone(info).stroke }}>
-              {info.partCount === 0 ? "—" : `${info.pct}%`}
+            <div className="font-mono text-2xl tabular-nums shrink-0" style={{ color: tone(info).stroke }}>
+              {info.partCount === 0 ? "—" : `${info.readiness.pct}%`}
             </div>
           </>
         ) : (
           <p className="text-[11px] text-graphite-500 leading-relaxed">
-            Schematic, not a model of the car — proportions follow the vehicle targets. Point at a region for its
-            subsystem. Orange is in progress, green is complete, dim is nothing entered yet.
+            Schematic, not a model of the car — proportions follow the vehicle targets. Click a region to open that
+            subsystem. Green is every gate closed, orange is in progress, amber is held by an open critical interface,
+            dim is nothing entered yet.
           </p>
         )}
       </div>
