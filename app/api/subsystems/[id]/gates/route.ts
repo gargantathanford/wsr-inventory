@@ -7,6 +7,7 @@ import {
   endorseGate,
   approveGate,
   reopenGate,
+  withdrawEndorsement,
   markNotApplicable,
   declarePartListComplete,
   type WriteResult
@@ -54,6 +55,10 @@ const Action = z.discriminatedUnion("action", [
     note: optionalText.optional()
   }),
   z.object({
+    action: z.literal("withdraw"),
+    gate: z.enum(GATE_IDS)
+  }),
+  z.object({
     action: z.literal("reopen"),
     gate: z.enum(GATE_IDS),
     // Required, and the minimum length is enforced in the store so the message
@@ -90,6 +95,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         break;
       case "approve":
         result = approveGate(params.id, body.gate as GateId, user, body.note ?? null);
+        break;
+      case "withdraw":
+        result = withdrawEndorsement(params.id, body.gate as GateId, user);
         break;
       case "reopen":
         result = reopenGate(params.id, body.gate as GateId, user, body.reason);

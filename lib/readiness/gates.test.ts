@@ -437,8 +437,36 @@ describe("who may endorse", () => {
     assert.equal(endorseProblem({ id: "u1", role: "TEAM_LEADER", leadsThisSubsystem: true }, ready()), null);
   });
 
-  test("the Chief can endorse directly, without leading the subsystem", () => {
-    assert.equal(endorseProblem({ id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false }, ready()), null);
+  test("the Chief CANNOT endorse a subsystem that has a lead", () => {
+    // Endorsing is the responsible lead's call. If the two most senior people
+    // can bypass that whenever convenient, two-stage sign-off collapses back
+    // into one signature — which is the thing it exists to prevent.
+    const p = endorseProblem(
+      { id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false, subsystemHasLead: true },
+      ready()
+    );
+    assert.match(p!, /endorsing is their call/);
+    assert.match(p!, /you approve what they put forward/);
+  });
+
+  test("the Chief CAN endorse a subsystem with no lead at all", () => {
+    // Otherwise an unled subsystem can never move, which is a worse failure
+    // than the one being prevented.
+    assert.equal(
+      endorseProblem(
+        { id: "u1", role: "CHIEF_ENGINEER", leadsThisSubsystem: false, subsystemHasLead: false },
+        ready()
+      ),
+      null
+    );
+  });
+
+  test("the refusal tells a Chief what to do instead", () => {
+    const p = endorseProblem(
+      { id: "u1", role: "ADMIN", leadsThisSubsystem: false, subsystemHasLead: true },
+      ready()
+    );
+    assert.match(p!, /assign the lead role to somebody else first/);
   });
 
   test("a blocked gate cannot be endorsed, and says what it waits on", () => {

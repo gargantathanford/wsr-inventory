@@ -160,6 +160,7 @@ export function GatePanel({
                 : post({ action: "endorse", gate: g.gate })
             }
             onApprove={() => post({ action: "approve", gate: g.gate })}
+            onWithdraw={() => post({ action: "withdraw", gate: g.gate })}
             onNa={() => setPrompt({ gate: g.gate, kind: "na", label: g.label })}
             onReopen={() => setPrompt({ gate: g.gate, kind: "reopen", label: g.label })}
           />
@@ -223,6 +224,7 @@ function GateRow({
   canApprove,
   onEndorse,
   onApprove,
+  onWithdraw,
   onNa,
   onReopen
 }: {
@@ -232,6 +234,7 @@ function GateRow({
   canApprove: boolean;
   onEndorse: () => void;
   onApprove: () => void;
+  onWithdraw: () => void;
   onNa: () => void;
   onReopen: () => void;
 }) {
@@ -284,6 +287,14 @@ function GateRow({
           {canApprove && gate.state === "ENDORSED" && (
             <button className="btn-primary text-[11px] py-1" disabled={busy} onClick={onApprove}>
               Approve
+            </button>
+          )}
+          {/* Withdraw, for an endorsement that went in too early. Without it
+              the only way back was for the Chief to approve and then reopen,
+              which puts a signature in the log that nobody meant. */}
+          {gate.state === "ENDORSED" && (canEndorse || canApprove) && (
+            <button className="btn-ghost text-[11px] py-1" disabled={busy} onClick={onWithdraw}>
+              Withdraw
             </button>
           )}
           {canApprove && gate.state === "PASSED" && (

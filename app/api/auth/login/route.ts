@@ -3,6 +3,7 @@ import { findUserByEmail, verifyPassword, signSession, SESSION_COOKIE } from "@/
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getDb } from "@/lib/db";
 import { newId } from "@/lib/id";
+import { shouldUseSecureCookie } from "@/lib/cookieScope";
 
 export async function POST(req: NextRequest) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -49,7 +50,13 @@ export async function POST(req: NextRequest) {
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Secure in production, EXCEPT over a private LAN address — otherwise
+    // testing on a phone over the shop Wi-Fi logs in successfully and then
+    // bounces back to the sign-in page, because the browser silently discards
+    // a Secure cookie delivered over plain http. See lib/cookieScope.ts: a
+    // real deployment is reached by its domain name, so this can never relax
+    // anything in production.
+    secure: shouldUseSecureCookie(req.headers.get("host"), req.headers.get("x-forwarded-proto")),
     path: "/",
     maxAge: 60 * 60 * 24 * 30
   });

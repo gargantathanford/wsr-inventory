@@ -2,6 +2,7 @@ import { getAllTasksDetailed, getAllSubsystems, getTaskDocuments } from "@/lib/q
 import { getSession, canReviewSubsystem, subsystemsMemberOf } from "@/lib/auth";
 import { TaskCard } from "@/components/TaskCard";
 import { NewTaskForm } from "@/components/NewTaskForm";
+import { ShowMore } from "@/components/ShowMore";
 
 export default async function TasksPage() {
   const user = await getSession();
@@ -13,10 +14,15 @@ export default async function TasksPage() {
     const isDirectAssignee = user ? t.assigned_to === user.id || t.extra_assignees?.some((a: any) => a.id === user.id) : false;
     const isScopeMember = t.assignment_scope !== "USER" && t.subsystem_id && myMemberships.has(t.subsystem_id);
     const canReview = user ? canReviewSubsystem(user, t.subsystem_id) : false;
+    // Rejecting deletes the task, so it is deliberately narrower than review:
+    // a lead sends work back, the people who answer for the whole build remove
+    // it entirely.
+    const canReject = user?.role === "ADMIN" || user?.role === "CHIEF_ENGINEER";
     return {
       task: t,
       attachments: t.status === "SUBMITTED_FOR_REVIEW" || t.status === "COMPLETED" ? getTaskDocuments(t.id) : [],
       canReview,
+      canReject,
       canAct: isDirectAssignee || isScopeMember || canReview
     };
   });
@@ -41,9 +47,11 @@ export default async function TasksPage() {
         <section>
           <div className="data-label mb-3">AWAITING YOUR REVIEW ({reviewQueue.length})</div>
           <div className="space-y-2">
-            {reviewQueue.map(({ task, attachments, canReview, canAct }) => (
-              <TaskCard key={task.id} task={task} currentUserId={user.id} canReview={canReview} canAct={canAct} attachments={attachments} />
+            <ShowMore noun="tasks awaiting review">
+            {reviewQueue.map(({ task, attachments, canReview, canReject, canAct }) => (
+              <TaskCard key={task.id} task={task} currentUserId={user.id} canReview={canReview} canReject={canReject} canAct={canAct} attachments={attachments} />
             ))}
+            </ShowMore>
           </div>
         </section>
       )}
@@ -51,9 +59,11 @@ export default async function TasksPage() {
       <section>
         {reviewQueue.length > 0 && <div className="data-label mb-3">ALL TASKS</div>}
         <div className="space-y-2">
-          {rest.map(({ task, attachments, canReview, canAct }) => (
-            <TaskCard key={task.id} task={task} currentUserId={user?.id || ""} canReview={canReview} canAct={canAct} attachments={attachments} />
-          ))}
+          <ShowMore noun="tasks">
+            {rest.map(({ task, attachments, canReview, canReject, canAct }) => (
+              <TaskCard key={task.id} task={task} currentUserId={user?.id || ""} canReview={canReview} canReject={canReject} canAct={canAct} attachments={attachments} />
+            ))}
+          </ShowMore>
           {tasks.length === 0 && <p className="text-sm text-graphite-500">No tasks yet.</p>}
         </div>
       </section>

@@ -35,9 +35,17 @@ export default async function SubsystemDetailPage({ params }: { params: { slug: 
   const readiness = getReadiness(subsystem.id);
   const subsystemInterfaces = getInterfacesFor(subsystem.id);
   const user = await getSession();
-  const isLead = members.some((m: any) => m.user_id === user?.id && m.role_in_subsystem === "LEADER");
+  // getSubsystemMembers selects `u.id`, not `user_id` — checking the wrong
+  // field meant isLead was permanently false and no team leader could endorse
+  // anything, which is also why the lead restriction had never been testable.
+  const isLead = members.some((m: any) => m.id === user?.id && m.role_in_subsystem === "LEADER");
   const canApprove = user?.role === "ADMIN" || user?.role === "CHIEF_ENGINEER";
-  const canEndorse = canApprove || isLead;
+  // Endorsing is the responsible lead's job. A Chief or Admin can stand in
+  // only where nobody leads the subsystem — otherwise "the lead endorses" is
+  // a rule the two most senior people can quietly bypass, and the two-stage
+  // sign-off stops meaning anything.
+  const hasLead = members.some((m: any) => m.role_in_subsystem === "LEADER");
+  const canEndorse = isLead || (canApprove && !hasLead);
   // Unit price x quantity required — see lineCost in lib/queries.
   const totalCost = parts.reduce((s, p) => s + lineCost(p), 0);
 

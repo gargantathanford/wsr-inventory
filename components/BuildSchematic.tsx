@@ -70,7 +70,23 @@ const HIT: Record<string, Array<[number, number, number, number]>> = {
   // The chassis gets the nose bay and the rear bay only. Its rails run
   // underneath every other region, so a rectangle covering the whole frame
   // would swallow the car.
-  CHS: [[106, 136, 60, 28], [536, 120, 22, 24]],
+  // The chassis gets a target in EVERY bay, not just the nose. Its rails run
+  // under the whole car, so a single big rectangle would swallow everything —
+  // but two small ones meant the frame was only clickable at the tip, which is
+  // not how anyone would look for it. These are the gaps between the other
+  // regions: nose bay, either side of the cockpit along the rails, the
+  // bulkhead stations, and the rear corners.
+  CHS: [
+    [106, 136, 60, 28],   // nose bay, ahead of the pedal box
+    [246, 120, 34, 12],   // left rail behind the front hoop
+    [246, 170, 34, 12],   // right rail behind the front hoop
+    [340, 108, 48, 10],   // left rail alongside the cockpit
+    [340, 184, 48, 10],   // right rail alongside the cockpit
+    [398, 104, 14, 14],   // main hoop, upper
+    [398, 184, 14, 14],   // main hoop, lower
+    [536, 120, 22, 20],   // rear bay, upper corner
+    [536, 162, 22, 20]    // rear bay, lower corner
+  ],
   AER: [[56, 60, 24, 180], [292, 94, 80, 14], [292, 192, 80, 14], [578, 72, 22, 156]],
   SUS: [[168, 84, 60, 36], [168, 180, 60, 36], [480, 86, 70, 30], [480, 184, 70, 30]],
   // Outboard slivers of each tyre, clear of the brake disc at the wheel centre.

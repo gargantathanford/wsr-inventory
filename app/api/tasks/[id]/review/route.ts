@@ -8,7 +8,11 @@ import { getTaskById } from "@/lib/queries";
 import { invalid, dbError, optionalRef, optionalText } from "@/lib/apiValidation";
 
 const ReviewInput = z.object({
-  action: z.enum(["approve", "return"]),
+  // "reject" is not "return". Return means do more work; reject means the task
+  // should not exist — somebody filing noise, or farming XP by raising and
+  // closing their own make-work. Returning those keeps them in the queue
+  // forever and gives the filer exactly the attention they wanted.
+  action: z.enum(["approve", "return", "reject"]),
   return_reason: z.string().optional().nullable()
 });
 
@@ -31,6 +35,63 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (data.action === "return" && !data.return_reason?.trim()) {
     return NextResponse.json({ error: "Explain what needs additional work." }, { status: 400 });
+  }
+
+  if (data.action === "reject") {
+    // Deliberately narrower than review. A lead can send work back; deleting
+    // somebody's task outright is a bigger call and belongs with the people
+    // who answer for the whole build.
+    if (user.role !== "ADMIN" && user.role !== "CHIEF_ENGINEER") {
+      return NextResponse.json(
+        {
+          error:
+            "Only the Chief Engineer or an Admin can reject a task outright. You can return it for " +
+            "more work, or ask them to remove it."
+        },
+        { status: 403 }
+      );
+    }
+    const reason = data.return_reason?.trim() ?? "";
+    if (reason.length < 10) {
+      return NextResponse.json(
+        {
+          error:
+            "Say why this task is being rejected. It is the only record that will survive — the task " +
+            "itself is deleted."
+        },
+        { status: 422 }
+      );
+    }
+
+    const db = getDb();
+    try {
+      const tx = db.transaction(() => {
+        // Any XP this task paid out is reversed FIRST, while the rows that
+        // explain it still exist. Rejecting a task somebody farmed points from
+        // and leaving the points behind would reward exactly the behaviour
+        // this is here to stop.
+        // Both transitions a task can pay out, matching the "return" branch
+        // below. Each is a no-op when that award was never made.
+        for (const transition of ["completed", "criticalPath"]) {
+          try {
+            reverse("task", params.id, transition, `Task rejected: ${reason}`);
+          } catch {
+            // XP must never block the real operation. See awardQuietly.
+          }
+        }
+        // The log entry outlives the task, so there is a record of a task
+        // having existed and been rejected, by whom, and why.
+        db.prepare(
+          `INSERT INTO activity_log (id, user_id, action, entity_type, entity_id, details)
+           VALUES (?, ?, 'REJECT', 'TASK', ?, ?)`
+        ).run(newId("log"), user.id, params.id, `"${task.title}" rejected: ${reason}`);
+        db.prepare(`DELETE FROM tasks WHERE id = ?`).run(params.id);
+      });
+      tx();
+    } catch (e) {
+      return dbError(e, "Could not reject that task");
+    }
+    return NextResponse.json({ ok: true, deleted: true });
   }
 
   const db = getDb();

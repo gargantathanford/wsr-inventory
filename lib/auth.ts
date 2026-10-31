@@ -47,8 +47,10 @@ export async function getSession(): Promise<SessionUser | null> {
   // Defense in depth: a deactivated account should lose access immediately,
   // not just at next login, even if their JWT hasn't expired yet.
   const db = getDb();
-  const row = db.prepare("SELECT is_active, password_changed_at FROM users WHERE id = ?").get(session.id) as
-    | { is_active: number; password_changed_at: string | null }
+  const row = db
+    .prepare("SELECT is_active, password_changed_at, role, name, email FROM users WHERE id = ?")
+    .get(session.id) as
+    | { is_active: number; password_changed_at: string | null; role: Role; name: string; email: string }
     | undefined;
   if (!row || row.is_active === 0) return null;
 
@@ -67,7 +69,18 @@ export async function getSession(): Promise<SessionUser | null> {
   // Every authenticated request is evidence of activity — this is what
   // powers the live online/away/offline presence indicators.
   db.prepare(`UPDATE users SET last_active = datetime('now') WHERE id = ?`).run(session.id);
-  return session;
+
+  // Role, name and email come from the DATABASE, not from the token.
+  //
+  // They used to come from the JWT, which meant a role change did nothing for
+  // up to thirty days. Promoting somebody looked broken — Jonathan made Harper
+  // an admin and she still could not see the admin controls. DEMOTING somebody
+  // was worse and silent: a lead stripped of their role kept every power they
+  // had until their token happened to expire.
+  //
+  // The row is already being read two lines up for is_active, so this costs
+  // three more columns on a query that was happening anyway.
+  return { ...session, role: row.role, name: row.name, email: row.email };
 }
 
 export function verifyPassword(password: string, hash: string): boolean {

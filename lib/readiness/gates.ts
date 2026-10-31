@@ -662,6 +662,8 @@ export interface Actor {
   role: Role;
   /** True when this person leads the subsystem the gate belongs to. */
   leadsThisSubsystem: boolean;
+  /** True when SOMEBODY leads it. A Chief stands in only when nobody does. */
+  subsystemHasLead?: boolean;
 }
 
 /** Chief Engineer and Admin are the only approving roles. */
@@ -676,8 +678,20 @@ export function endorseProblem(actor: Actor, gate: GateStatus): string | null {
   if (actor.role === "TEAM_MEMBER") {
     return "Only the subsystem lead can endorse a gate. Ask your lead to put it forward.";
   }
-  if (actor.role === "TEAM_LEADER" && !actor.leadsThisSubsystem) {
-    return "You lead a different subsystem. Only this subsystem's lead or the Chief Engineer can endorse this gate.";
+  // The RESPONSIBLE lead endorses. A Chief or Admin may stand in only where
+  // the subsystem has no lead at all — otherwise the rule that a lead puts
+  // work forward is one the two most senior people can bypass whenever it is
+  // convenient, and two-stage sign-off collapses back into one signature.
+  if (!actor.leadsThisSubsystem) {
+    if (!isApprover(actor.role)) {
+      return "You lead a different subsystem. Only this subsystem's lead can endorse this gate.";
+    }
+    if (actor.subsystemHasLead !== false) {
+      return (
+        "This subsystem has a lead, and endorsing is their call — you approve what they put forward. " +
+        "If they are unavailable, assign the lead role to somebody else first."
+      );
+    }
   }
   if (gate.state === "BLOCKED") {
     return `${gate.label} cannot be endorsed yet — ${gate.detail.toLowerCase()}.`;

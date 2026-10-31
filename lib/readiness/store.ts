@@ -227,7 +227,17 @@ function actorFor(subsystemId: string, user: { id: string; role: string }): Acto
         WHERE user_id = ? AND subsystem_id = ? AND role_in_subsystem = 'LEADER'`
     )
     .get(user.id, subsystemId);
-  return { id: user.id, role: user.role as Actor["role"], leadsThisSubsystem: !!leads };
+  // Whether ANYBODY leads it, so a Chief can stand in for an unled subsystem
+  // without being able to bypass a lead who exists.
+  const anyLead = db
+    .prepare(`SELECT 1 FROM subsystem_members WHERE subsystem_id = ? AND role_in_subsystem = 'LEADER'`)
+    .get(subsystemId);
+  return {
+    id: user.id,
+    role: user.role as Actor["role"],
+    leadsThisSubsystem: !!leads,
+    subsystemHasLead: !!anyLead
+  };
 }
 
 function log(subsystemId: string, gate: GateId, action: string, actorId: string, note: string | null) {
@@ -323,6 +333,50 @@ export function approveGate(
   ).run(user.id, now, subsystemId, gate);
 
   log(subsystemId, gate, "APPROVED", user.id, note);
+  return { ok: true };
+}
+
+/**
+ * Withdraw an endorsement that went in too early.
+ *
+ * The lead who endorsed can take it back, and so can a Chief. Without this the
+ * only route out of a premature endorsement was for the Chief to approve it
+ * and then reopen it — which puts a signature in the log that nobody meant,
+ * and leaves the history saying the gate passed when it never did.
+ *
+ * Only an UNAPPROVED endorsement can be withdrawn. Once it is approved the
+ * route is reopenGate, which is deliberately louder and demands a reason.
+ */
+export function withdrawEndorsement(
+  subsystemId: string,
+  gate: GateId,
+  user: { id: string; role: string }
+): WriteResult {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT endorsed_by, approved_by, decision FROM subsystem_gates WHERE subsystem_id = ? AND gate = ?`)
+    .get(subsystemId, gate) as
+    | { endorsed_by: string | null; approved_by: string | null; decision: string }
+    | undefined;
+
+  if (!row || !row.endorsed_by) return { ok: false, reason: "That gate has not been endorsed." };
+  if (row.approved_by) {
+    return {
+      ok: false,
+      reason:
+        "That gate has already been approved, so withdrawing the endorsement would not change " +
+        "anything. Reopen it instead — that asks for a reason and records it."
+    };
+  }
+
+  const actor = actorFor(subsystemId, user);
+  const isApproverRole = user.role === "ADMIN" || user.role === "CHIEF_ENGINEER";
+  if (row.endorsed_by !== user.id && !isApproverRole) {
+    return { ok: false, reason: "Only the person who endorsed it, or the Chief Engineer, can withdraw it." };
+  }
+
+  db.prepare(`DELETE FROM subsystem_gates WHERE subsystem_id = ? AND gate = ?`).run(subsystemId, gate);
+  log(subsystemId, gate, "REOPENED", user.id, "endorsement withdrawn");
   return { ok: true };
 }
 

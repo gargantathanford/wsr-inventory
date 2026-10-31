@@ -20,12 +20,15 @@ export function CalendarEventCard({
   currentUserId,
   canReview,
   canAct,
+  canStart = false,
   attachments
 }: {
   event: any;
   currentUserId: string;
   canReview: boolean;
   canAct: boolean;
+  /** Starting an event is the responsible lead's call, not any member's. */
+  canStart?: boolean;
   attachments: any[];
 }) {
   const router = useRouter();
@@ -159,7 +162,7 @@ export function CalendarEventCard({
         </div>
       )}
 
-      {canAct && event.is_actionable && event.status === "UPCOMING" && (
+      {canStart && event.is_actionable && event.status === "UPCOMING" && (
         <button className="btn-ghost text-xs" disabled={loading} onClick={start}>
           Start
         </button>

@@ -10,12 +10,15 @@ export function TaskCard({
   task,
   currentUserId,
   canReview,
+  canReject = false,
   canAct,
   attachments
 }: {
   task: any;
   currentUserId: string;
   canReview: boolean;
+  /** Chief Engineer / Admin: may delete a task outright, not just return it. */
+  canReject?: boolean;
   canAct: boolean;
   attachments: any[];
 }) {
@@ -112,7 +115,7 @@ export function TaskCard({
         </div>
       )}
 
-      {task.status === "SUBMITTED_FOR_REVIEW" && canReview && <TaskReviewPanel taskId={task.id} />}
+      {task.status === "SUBMITTED_FOR_REVIEW" && canReview && <TaskReviewPanel taskId={task.id} canReject={canReject} />}
 
       {canAct && task.status === "OPEN" && (
         <button className="btn-ghost text-xs" disabled={loading} onClick={start}>

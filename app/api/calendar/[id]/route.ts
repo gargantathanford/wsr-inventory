@@ -22,15 +22,38 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const body = await req.json().catch(() => ({}));
   const db = getDb();
 
+  // Authorization FIRST. The status branch used to sit above this check and
+  // return early, so any signed-in account could move any event to any state
+  // — not just start one. Nothing in the UI offered it, which is exactly why
+  // it went unnoticed: the hole was only reachable by calling the API.
+  const mayManage =
+    canReviewSubsystem(user, event.subsystem_id) ||
+    user.role === "ADMIN" ||
+    user.role === "CHIEF_ENGINEER";
+
   if (body.status) {
     if (BLOCKED_STATUSES.has(body.status)) {
       return NextResponse.json({ error: "Use the completion/review endpoints for this transition." }, { status: 400 });
+    }
+    // Starting an event commits the team to a deadline being worked on, so it
+    // belongs to whoever is accountable for it. A member who wants one started
+    // asks their lead, the same way they raise a purchase request rather than
+    // an order.
+    if (!mayManage) {
+      return NextResponse.json(
+        {
+          error:
+            "Only the responsible team lead, the Chief Engineer or an Admin can start or change the " +
+            "status of a calendar event. Ask your lead to start it."
+        },
+        { status: 403 }
+      );
     }
     db.prepare(`UPDATE calendar_events SET status = ? WHERE id = ?`).run(body.status, params.id);
     return NextResponse.json({ ok: true });
   }
 
-  if (!canReviewSubsystem(user, event.subsystem_id) && event.created_by !== user.id) {
+  if (!mayManage && event.created_by !== user.id) {
     return NextResponse.json({ error: "You cannot edit this event." }, { status: 403 });
   }
   const updates: Record<string, any> = {};

@@ -3,6 +3,7 @@ import { getSession, canReviewSubsystem, subsystemsMemberOf } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { CalendarEventCard } from "@/components/CalendarEventCard";
 import { NewCalendarEventForm } from "@/components/NewCalendarEventForm";
+import { ShowMore } from "@/components/ShowMore";
 
 export default async function CalendarPage() {
   const user = await getSession();
@@ -19,7 +20,16 @@ export default async function CalendarPage() {
     const canReview = user ? canReviewSubsystem(user, e.subsystem_id) : false;
     const isResponsible = user ? e.responsible_user_id === user.id : false;
     const isScopeMember = e.subsystem_id ? myMemberships.has(e.subsystem_id) : true;
-    return { event: e, attachments, canReview, canAct: isResponsible || isScopeMember || canReview };
+    // canAct covers SUBMITTING completion — any member of the responsible team
+    // can do that, and should. Starting is separate: it commits the team to a
+    // deadline being worked, so it belongs to whoever is accountable.
+    return {
+      event: e,
+      attachments,
+      canReview,
+      canAct: isResponsible || isScopeMember || canReview,
+      canStart: canReview
+    };
   }
 
   return (
@@ -37,6 +47,7 @@ export default async function CalendarPage() {
       <section>
         <div className="data-label mb-3">UPCOMING ({upcoming.length})</div>
         <div className="space-y-2">
+          <ShowMore noun="upcoming events">
           {upcoming.map((e) => {
             const m = withMeta(e);
             return (
@@ -46,10 +57,12 @@ export default async function CalendarPage() {
                 currentUserId={user?.id || ""}
                 canReview={m.canReview}
                 canAct={m.canAct}
+                canStart={m.canStart}
                 attachments={m.attachments}
               />
             );
           })}
+          </ShowMore>
           {upcoming.length === 0 && <p className="text-sm text-graphite-500">Nothing on the calendar yet.</p>}
         </div>
       </section>
@@ -58,6 +71,7 @@ export default async function CalendarPage() {
         <section>
           <div className="data-label mb-3">COMPLETED ({completed.length})</div>
           <div className="space-y-2">
+            <ShowMore noun="completed events" initial={5}>
             {completed.map((e) => {
               const m = withMeta(e);
               return (
@@ -67,10 +81,12 @@ export default async function CalendarPage() {
                   currentUserId={user?.id || ""}
                   canReview={m.canReview}
                   canAct={m.canAct}
+                canStart={m.canStart}
                   attachments={m.attachments}
                 />
               );
             })}
+            </ShowMore>
           </div>
         </section>
       )}
