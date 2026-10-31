@@ -723,3 +723,23 @@ CREATE INDEX IF NOT EXISTS idx_gate_log_subsystem ON subsystem_gate_log(subsyste
 -- lib/db.ts exec's this whole file on every connection, so an ALTER here fails
 -- with "duplicate column name" on the second boot and takes the app down.
 -- New columns go inline in the CREATE TABLE above AND in the migration.
+
+-- ---------------------------------------------------------------------------
+-- Multiplier windows: "double XP during Saturday build day".
+--
+-- Bounded deliberately — see lib/xp/ranks.ts for why each limit exists. The
+-- short version: 2x ceiling so waiting never beats working, 14 hours so a
+-- window cannot quietly become the baseline, no overlaps so two windows cannot
+-- multiply together, and the daily cap applies AFTER the multiplier so a window
+-- is not a way around it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS xp_multiplier_windows (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  multiplier REAL NOT NULL CHECK (multiplier > 1 AND multiplier <= 2),
+  starts_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_xp_windows_span ON xp_multiplier_windows(starts_at, ends_at);

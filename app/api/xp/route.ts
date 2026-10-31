@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getStreak, getSubsystemXp, getTotals, getUserEvents, settleDeferred, TEAM_TIMEZONE } from "@/lib/xp/store";
+import {
+  getStreak, getSubsystemXp, getTotals, getUserEvents, settleDeferred, TEAM_TIMEZONE,
+  standingFor, getActiveWindows
+} from "@/lib/xp/store";
 import { XP_EVENTS } from "@/lib/xp/rules";
 
 /**
@@ -49,7 +52,14 @@ export async function GET(req: NextRequest) {
     note: e.note
   }));
 
+  const { rank, achievements } = standingFor(user.id);
+
   return NextResponse.json({
+    rank,
+    achievements,
+    // Only windows that have not finished. A list of past Saturdays is history,
+    // not something anyone can act on.
+    windows: getActiveWindows(),
     total: totals.total,
     pending: totals.pending,
     selfVerifiedCount: totals.selfVerifiedCount,

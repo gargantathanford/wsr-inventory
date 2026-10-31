@@ -22,6 +22,24 @@ const DB_PATH = process.env.WSR_DB_PATH || path.join(process.cwd(), "data", "wsr
 
 const TABLES: Array<{ name: string; sql: string[] }> = [
   {
+    // Added after the first XP migration shipped. Re-running migrate-xp is
+    // safe and reports the already-present tables as such, same as migrate-v2
+    // gaining its nineteenth step.
+    name: "xp_multiplier_windows",
+    sql: [
+      `CREATE TABLE IF NOT EXISTS xp_multiplier_windows (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        multiplier REAL NOT NULL CHECK (multiplier > 1 AND multiplier <= 2),
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_xp_windows_span ON xp_multiplier_windows(starts_at, ends_at)`
+    ]
+  },
+  {
     name: "xp_events",
     sql: [
       `CREATE TABLE IF NOT EXISTS xp_events (

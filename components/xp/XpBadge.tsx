@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useXp, type LedgerEntry } from "./XpProvider";
+import { useXp, type LedgerEntry, type AchievementStatus } from "./XpProvider";
 import { Portal } from "@/components/Portal";
 
 /**
@@ -54,8 +54,12 @@ export function XpBadge() {
  * conclude the system is broken or rigged.
  */
 function LedgerDrawer({ onClose }: { onClose: () => void }) {
-  const { total, pending, streak, ledger, ledgerTruncated, selfVerifiedCount, reversedCount } = useXp();
+  const {
+    total, pending, streak, ledger, ledgerTruncated, selfVerifiedCount, reversedCount,
+    rank, achievements, windows
+  } = useXp();
   const [full, setFull] = useState<LedgerEntry[] | null>(null);
+  const [tab, setTab] = useState<"history" | "achievements">("history");
 
   async function loadFull() {
     const res = await fetch("/api/xp?ledger=1");
@@ -84,11 +88,37 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
               </span>
               <span className="text-xs text-graphite-500">XP</span>
             </div>
+            {rank && (
+              <div className="mt-1.5">
+                <div className="text-sm text-graphite-100">{rank.rank.name}</div>
+                <div className="text-[11px] text-graphite-500 leading-relaxed max-w-[16rem]">
+                  {rank.rank.means}
+                </div>
+              </div>
+            )}
           </div>
           <button type="button" onClick={onClose} className="text-graphite-500 hover:text-graphite-200 text-sm">
             close
           </button>
         </div>
+
+        {rank?.next && (
+          <div>
+            <div className="h-1 rounded-full bg-graphite-850 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-[width] duration-500"
+                style={{ width: `${rank.bandPct}%`, backgroundColor: "#C7FF3D" }}
+              />
+            </div>
+            <div className="font-mono text-[10px] text-graphite-500 mt-1">
+              {rank.toNext} XP TO {rank.next.name.toUpperCase()}
+            </div>
+          </div>
+        )}
+
+        {/* A window nobody knows about is not an incentive, it is a surprise in
+            the ledger. Shown whenever one is open or coming. */}
+        {windows.length > 0 && <WindowNotice windows={windows} />}
 
         <div className="grid grid-cols-3 gap-3 text-center">
           <Stat label="STREAK" value={`${streak.current}d`} hint="Engineering Days" />
@@ -119,8 +149,25 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
           </p>
         )}
 
+        <div className="flex gap-1 border-b border-graphite-800">
+          {(["history", "achievements"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`font-mono text-[10px] px-3 py-2 -mb-px border-b-2 ${
+                tab === t ? "border-volt text-graphite-100" : "border-transparent text-graphite-500"
+              }`}
+            >
+              {t === "history" ? "HISTORY" : `ACHIEVEMENTS · ${achievements.filter((a) => a.earned).length}`}
+            </button>
+          ))}
+        </div>
+
+        {tab === "achievements" ? (
+          <AchievementList achievements={achievements} />
+        ) : (
         <div>
-          <div className="data-label mb-2">HISTORY</div>
           {rows.length === 0 ? (
             <p className="text-xs text-graphite-500">
               Nothing yet. XP comes from finishing real things — reconciling an order, closing a task with evidence,
@@ -166,6 +213,7 @@ function LedgerDrawer({ onClose }: { onClose: () => void }) {
             </button>
           )}
         </div>
+        )}
       </div>
     </div>
     </Portal>
@@ -179,5 +227,113 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       <div className="font-mono text-lg text-graphite-100 mt-0.5">{value}</div>
       {hint && <div className="text-[9px] text-graphite-600">{hint}</div>}
     </div>
+  );
+}
+
+/**
+ * An open or upcoming multiplier window.
+ *
+ * Announced rather than left to be discovered: a window nobody knows about is
+ * not an incentive, it is an unexplained number in somebody's ledger.
+ */
+/**
+ * "Fri 11:25 PM – 7:25 AM" is ambiguous when a window crosses midnight, so the
+ * weekday is repeated on the end when it lands on a different day.
+ */
+function formatSpan(startsAt: string, endsAt: string): string {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  const time = (d: Date) => d.toLocaleString(undefined, { hour: "numeric", minute: "2-digit" });
+  const day = (d: Date) => d.toLocaleString(undefined, { weekday: "short" });
+  const sameDay = start.toDateString() === end.toDateString();
+  return sameDay
+    ? `${day(start)} ${time(start)} – ${time(end)}`
+    : `${day(start)} ${time(start)} – ${day(end)} ${time(end)}`;
+}
+
+function WindowNotice({ windows }: { windows: Array<{ id: string; label: string; multiplier: number; startsAt: string; endsAt: string }> }) {
+  const now = Date.now();
+  const live = windows.find((w) => Date.parse(w.startsAt) <= now && now < Date.parse(w.endsAt));
+  const next = windows.find((w) => Date.parse(w.startsAt) > now);
+  const w = live ?? next;
+  if (!w) return null;
+
+  return (
+    <div
+      className={`rounded border px-3 py-2 ${
+        live ? "border-volt/50 bg-volt/[0.06]" : "border-graphite-800"
+      }`}
+    >
+      <div className="font-mono text-[10px]" style={{ color: live ? "#C7FF3D" : undefined }}>
+        {live ? `${w.multiplier}x LIVE NOW` : `${w.multiplier}x COMING`}
+      </div>
+      <div className="text-xs text-graphite-200 mt-0.5">{w.label}</div>
+      <div className="font-mono text-[10px] text-graphite-500 mt-0.5">
+        {formatSpan(w.startsAt, w.endsAt)}
+      </div>
+      {live && (
+        <div className="text-[10px] text-graphite-500 mt-1 leading-relaxed">
+          The daily cap still applies — a doubled day is a better day, not an unlimited one.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Achievements, earned first.
+ *
+ * Every one shows HOW and WHY, earned or not, because an achievement whose
+ * condition is a mystery is a slot machine rather than a goal. Nothing here
+ * rewards raw volume — the set is built around variety and finishing, which
+ * are the habits a first-year team actually lacks.
+ */
+function AchievementList({ achievements }: { achievements: AchievementStatus[] }) {
+  if (achievements.length === 0) {
+    return (
+      <p className="text-xs text-graphite-500 leading-relaxed">
+        Nothing yet. These come from finishing things and from working across more than one
+        subsystem — not from piling up points.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="space-y-2">
+      {achievements.map((a) => (
+        <li
+          key={a.id}
+          className={`rounded border px-3 py-2.5 ${
+            a.earned ? "border-volt/40" : "border-graphite-800"
+          }`}
+        >
+          <div className="flex items-baseline justify-between gap-3">
+            <span className={`text-xs ${a.earned ? "text-graphite-100" : "text-graphite-300"}`}>
+              {a.name}
+            </span>
+            {a.earned ? (
+              <span className="font-mono text-[10px]" style={{ color: "#C7FF3D" }}>
+                EARNED
+              </span>
+            ) : a.progressPct !== null ? (
+              <span className="font-mono text-[10px] text-graphite-500">{a.progressPct}%</span>
+            ) : null}
+          </div>
+
+          <p className="text-[11px] text-graphite-500 mt-1 leading-relaxed">{a.how}</p>
+
+          {!a.earned && a.progressPct !== null && (
+            <div className="h-0.5 rounded-full bg-graphite-850 overflow-hidden mt-1.5">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${a.progressPct}%`, backgroundColor: "#4B5563" }}
+              />
+            </div>
+          )}
+
+          {a.earned && <p className="text-[11px] text-graphite-400 mt-1.5 leading-relaxed">{a.why}</p>}
+        </li>
+      ))}
+    </ul>
   );
 }

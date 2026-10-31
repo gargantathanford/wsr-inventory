@@ -12,6 +12,7 @@
  * than find it quietly missing.
  */
 import { DAILY_XP_CAP, XP_EVENTS, localDay, pointsFor, requiresApproval, awardKey } from "./rules";
+import { applyMultiplier } from "./ranks";
 
 export type XpStatus = "PENDING" | "AWARDED" | "REVERSED" | "VOID";
 
@@ -117,6 +118,13 @@ export interface AwardRequest {
   /** True when the same person created the item, closed it and supplied its evidence. */
   selfVerified?: boolean;
   note?: string | null;
+  /**
+   * The multiplier in force at `at`, from an open window. 1 when none applies.
+   *
+   * Passed IN rather than looked up here, because this module is pure and the
+   * windows live in a table. The caller resolves it with multiplierAt().
+   */
+  multiplier?: number;
 }
 
 export type AwardOutcome =
@@ -143,7 +151,14 @@ export function prepareAward(existing: XpEvent[], req: AwardRequest): AwardOutco
   if (already) return { ok: false, reason: "duplicate", existingId: already.id };
 
   const selfVerified = !!req.selfVerified;
-  const full = pointsFor(req.kind, { selfVerified });
+  const base = pointsFor(req.kind, { selfVerified });
+
+  // A multiplier window applies BEFORE the daily cap, never after. If it were
+  // applied afterwards it would be the one way to escape the cap, and the cap
+  // is the thing standing between the whole XP feature and somebody farming
+  // it. A double-XP day is a better day, not an unbounded one.
+  const multiplier = req.multiplier && req.multiplier > 1 ? req.multiplier : 1;
+  const full = applyMultiplier(base, multiplier);
 
   // Approval-tier awards land PENDING and pay nothing yet, so they do not
   // consume cap room until a human approves them.

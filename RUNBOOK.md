@@ -183,6 +183,29 @@ team out the moment this lands.
 Skip this and sign-in still works, but issuing setup links and the
 change-password page both fail at runtime.
 
+## 6b. XP ranks, achievements and multiplier windows
+
+`migrate-xp.ts` gained a fourth table after it first shipped. Re-run it — each
+table is checked independently, so it reports the three you already have as
+present and adds only the new one.
+
+```bash
+docker compose run --rm maint npx tsx scripts/migrate-xp.ts
+docker compose run --rm maint npx tsx scripts/migrate-xp.ts --commit
+```
+
+**Expect** `4 total, 3 present, 1 to create` on a database that already ran the
+first version, and `xp_multiplier_windows` as the one being added.
+
+Ranks and achievements need no migration — both are derived from the ledger
+every time the drawer opens, so nothing is stored that can drift out of step
+with the events it came from.
+
+To open a double-XP window, POST to `/api/xp/windows` as Chief or Admin. The
+limits are refused with an explanation rather than a number: 2x ceiling, 14
+hours maximum, no overlaps, and **the daily cap still applies afterwards** — a
+window is not a way around it.
+
 ## 7b. Gate-based completeness
 
 ```bash
@@ -389,6 +412,12 @@ that reason.
 ones marked critical.
 
 **Procedures** (`/procedures`) — "How to add a part", 14 steps.
+
+**Interfaces** (`/interfaces`) — empty on a fresh database, with an explanation
+of what an interface is. Raise one between two subsystems: the reference number
+is generated from their codes. Agree it as one lead and the row should say
+WAITING ON THE OTHER LEAD rather than showing AGREED. Agree the second side and
+it flips. A P1 left half-agreed caps both of its subsystems at 84%.
 
 **XP badge** (top bar) — a small lime figure next to the check-in button.
 Click it: the ledger drawer opens and says there is nothing yet. Approve a task

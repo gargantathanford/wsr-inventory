@@ -113,7 +113,14 @@ function insert(e: XpEvent): void {
  * it must never be able to fail the real work.
  */
 export function award(req: Omit<AwardRequest, "timeZone"> & { timeZone?: string }): AwardOutcome {
-  const full: AwardRequest = { ...req, timeZone: req.timeZone ?? TEAM_TIMEZONE };
+  // The multiplier is resolved HERE, once, from the window covering the moment
+  // the work happened — not the moment somebody got round to recording it.
+  // Every call site gets it for free rather than each having to remember.
+  const full: AwardRequest = {
+    ...req,
+    timeZone: req.timeZone ?? TEAM_TIMEZONE,
+    multiplier: req.multiplier ?? currentMultiplier(req.at)
+  };
   const existing = getUserEvents(full.userId);
   const outcome = prepareAward(existing, full);
   if (!outcome.ok) return outcome;
@@ -544,4 +551,184 @@ export function getSubsystemXp() {
         ORDER BY points DESC, s.name`
     )
     .all() as Array<{ id: string; name: string; code: string | null; points: number; events: number }>;
+}
+
+/* -------------------------------------------------------------------------
+ * Ranks, achievements and multiplier windows
+ * ---------------------------------------------------------------------- */
+
+import {
+  rankFor,
+  achievementsFor,
+  multiplierAt,
+  windowProblem,
+  type AchievementFacts,
+  type MultiplierWindow,
+  type RankStanding,
+  type AchievementStatus
+} from "./ranks";
+
+/** Windows that have not finished yet, soonest first. */
+export function getActiveWindows(): MultiplierWindow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, label, multiplier, starts_at AS startsAt, ends_at AS endsAt, created_by AS createdBy
+         FROM xp_multiplier_windows
+        WHERE ends_at > datetime('now')
+        ORDER BY starts_at`
+    )
+    .all() as MultiplierWindow[];
+}
+
+export function getAllWindows(): MultiplierWindow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, label, multiplier, starts_at AS startsAt, ends_at AS endsAt, created_by AS createdBy
+         FROM xp_multiplier_windows ORDER BY starts_at DESC LIMIT 50`
+    )
+    .all() as MultiplierWindow[];
+}
+
+/**
+ * The multiplier to pass into an award right now.
+ *
+ * Every window is checked, not just the open ones, because a backdated award
+ * should get the multiplier that applied when the work happened rather than
+ * the one in force when somebody got round to recording it.
+ */
+export function currentMultiplier(at: string): number {
+  const all = getDb()
+    .prepare(
+      `SELECT id, label, multiplier, starts_at AS startsAt, ends_at AS endsAt, created_by AS createdBy
+         FROM xp_multiplier_windows`
+    )
+    .all() as MultiplierWindow[];
+  return multiplierAt(at, all).multiplier;
+}
+
+export function createWindow(
+  input: { label: string; multiplier: number; startsAt: string; endsAt: string },
+  user: { id: string; role: string }
+): WriteResultXp {
+  if (user.role !== "ADMIN" && user.role !== "CHIEF_ENGINEER") {
+    return { ok: false, reason: "Only the Chief Engineer or an Admin can open a multiplier window." };
+  }
+  const existing = getDb()
+    .prepare(`SELECT starts_at AS startsAt, ends_at AS endsAt FROM xp_multiplier_windows`)
+    .all() as Array<{ startsAt: string; endsAt: string }>;
+
+  const problem = windowProblem(input, existing);
+  if (problem) return { ok: false, reason: problem.reason };
+
+  getDb()
+    .prepare(
+      `INSERT INTO xp_multiplier_windows (id, label, multiplier, starts_at, ends_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(newId("xpw"), input.label.trim(), input.multiplier, input.startsAt, input.endsAt, user.id);
+  return { ok: true };
+}
+
+export function deleteWindow(id: string, user: { id: string; role: string }): WriteResultXp {
+  if (user.role !== "ADMIN" && user.role !== "CHIEF_ENGINEER") {
+    return { ok: false, reason: "Only the Chief Engineer or an Admin can remove a multiplier window." };
+  }
+  const row = getDb()
+    .prepare(`SELECT ends_at FROM xp_multiplier_windows WHERE id = ?`)
+    .get(id) as { ends_at: string } | undefined;
+  if (!row) return { ok: false, reason: "No such window." };
+  // A window that has already paid out cannot be deleted: the awards it
+  // multiplied are in the ledger, and removing the reason for them would make
+  // the history unexplainable.
+  if (Date.parse(row.ends_at) <= Date.now()) {
+    return {
+      ok: false,
+      reason:
+        "That window has already run. Awards were multiplied under it, so removing it would leave " +
+        "those points with no explanation in the ledger."
+    };
+  }
+  getDb().prepare(`DELETE FROM xp_multiplier_windows WHERE id = ?`).run(id);
+  return { ok: true };
+}
+
+export type WriteResultXp = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Everything the achievements need, assembled from the ledger and the rest of
+ * the database.
+ */
+export function achievementFactsFor(userId: string): AchievementFacts {
+  const db = getDb();
+
+  const totals = getTotals(userId);
+  const streak = getStreak(userId);
+
+  const byKind = db
+    .prepare(
+      `SELECT kind, COUNT(*) AS c FROM xp_events
+        WHERE user_id = ? AND status = 'AWARDED' GROUP BY kind`
+    )
+    .all(userId) as Array<{ kind: string; c: number }>;
+  const countByKind: Record<string, number> = {};
+  for (const r of byKind) countByKind[r.kind] = r.c;
+
+  const subs = db
+    .prepare(
+      `SELECT COUNT(DISTINCT subsystem_id) AS c FROM xp_events
+        WHERE user_id = ? AND status = 'AWARDED' AND subsystem_id IS NOT NULL`
+    )
+    .get(userId) as { c: number };
+
+  // Gates this person endorsed that somebody else then approved. Counting only
+  // the approved ones is the point: endorsing freely costs nothing.
+  const gates = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM subsystem_gates
+        WHERE endorsed_by = ? AND approved_by IS NOT NULL AND decision = 'PASSED'`
+    )
+    .get(userId) as { c: number };
+
+  const ifaces = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM interfaces
+        WHERE (agreed_by_a = ? OR agreed_by_b = ?)
+          AND agreed_by_a IS NOT NULL AND agreed_by_b IS NOT NULL`
+    )
+    .get(userId, userId) as { c: number };
+
+  // Minutes are stored on the session rather than derived from timestamps —
+  // settleShopSession already does that arithmetic, including the 04:00
+  // auto-void, and recomputing it here would be a second answer to the same
+  // question. Verified and unverified are summed because presence
+  // verification is deliberately switched off (PRESENCE_XP_ENABLED = false),
+  // so every minute currently lands as unverified; counting only verified
+  // would report zero hours for everybody.
+  const hours = db
+    .prepare(
+      `SELECT COALESCE(SUM(COALESCE(verified_minutes,0) + COALESCE(unverified_minutes,0)), 0) / 60.0 AS h
+         FROM shop_sessions WHERE user_id = ? AND state = 'settled'`
+    )
+    .get(userId) as { h: number };
+
+  return {
+    approvedXp: totals.total,
+    kinds: new Set(Object.keys(countByKind)),
+    countByKind,
+    subsystemsTouched: subs.c,
+    longestStreak: streak.longest,
+    reversedCount: totals.reversedCount,
+    selfVerifiedCount: totals.selfVerifiedCount,
+    gatesEndorsedAndApproved: gates.c,
+    interfacesAgreedBothSides: ifaces.c,
+    shopHours: Math.round(hours.h)
+  };
+}
+
+export function standingFor(userId: string): {
+  rank: RankStanding;
+  achievements: AchievementStatus[];
+} {
+  const facts = achievementFactsFor(userId);
+  return { rank: rankFor(facts.approvedXp), achievements: achievementsFor(facts) };
 }

@@ -17,7 +17,35 @@ export interface LedgerEntry {
   note: string | null;
 }
 
+export interface RankStanding {
+  rank: { at: number; name: string; means: string };
+  next: { at: number; name: string; means: string } | null;
+  toNext: number;
+  bandPct: number;
+}
+
+export interface AchievementStatus {
+  id: string;
+  name: string;
+  how: string;
+  why: string;
+  earned: boolean;
+  progressPct: number | null;
+  secret?: boolean;
+}
+
+export interface MultiplierWindow {
+  id: string;
+  label: string;
+  multiplier: number;
+  startsAt: string;
+  endsAt: string;
+}
+
 export interface XpState {
+  rank: RankStanding | null;
+  achievements: AchievementStatus[];
+  windows: MultiplierWindow[];
   total: number;
   pending: number;
   selfVerifiedCount: number;
@@ -39,6 +67,9 @@ export function useXp(): XpState {
 }
 
 const EMPTY: Omit<XpState, "refresh"> = {
+  rank: null,
+  achievements: [],
+  windows: [],
   total: 0,
   pending: 0,
   selfVerifiedCount: 0,
@@ -77,6 +108,9 @@ export function XpProvider({ children, enabled = true }: { children: React.React
       }
       const data = await res.json();
       const next = {
+        rank: data.rank ?? null,
+        achievements: (data.achievements ?? []) as AchievementStatus[],
+        windows: (data.windows ?? []) as MultiplierWindow[],
         total: data.total ?? 0,
         pending: data.pending ?? 0,
         selfVerifiedCount: data.selfVerifiedCount ?? 0,
