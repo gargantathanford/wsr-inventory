@@ -62,26 +62,26 @@ const REGION_ORDER = ["CHS", "SUS", "WHE", "BRK", "STE", "PWT", "CVT", "ELE", "E
 const HIT: Record<string, Array<[number, number, number, number]>> = {
   // [x, y, width, height] in viewBox units. THESE MUST NOT OVERLAP.
   //
-  // Verified by hit test rather than by eye: a script asks the browser what
-  // actually answers at the centre of every rectangle here. It has caught
-  // three rounds of collisions. If you move the drawing, re-run it — an
-  // overlapping rect fails silently and feels like a flaky interface rather
-  // than a bug.
+  // Verified by hit test, never by eye: a script asks the browser what actually
+  // answers at the centre of every rectangle here. It has caught four rounds of
+  // collisions. Re-run it after moving anything — an overlapping rect fails
+  // silently and feels like a flaky interface rather than a bug.
   //
-  // The chassis gets the nose bay only. Its tub runs underneath every other
-  // region, so a rectangle covering it would swallow half the car.
-  CHS: [[122, 138, 38, 24]],
-  AER: [[68, 60, 26, 180], [288, 100, 84, 12], [288, 190, 84, 12], [582, 74, 24, 152]],
-  SUS: [[168, 72, 56, 54], [168, 174, 56, 54], [462, 76, 44, 52], [462, 172, 44, 52]],
+  // The chassis gets the nose bay and the rear bay only. Its rails run
+  // underneath every other region, so a rectangle covering the whole frame
+  // would swallow the car.
+  CHS: [[106, 136, 60, 28], [536, 120, 22, 24]],
+  AER: [[56, 60, 24, 180], [292, 94, 80, 14], [292, 192, 80, 14], [578, 72, 22, 156]],
+  SUS: [[168, 84, 60, 36], [168, 180, 60, 36], [480, 86, 70, 30], [480, 184, 70, 30]],
   // Outboard slivers of each tyre, clear of the brake disc at the wheel centre.
-  WHE: [[163, 31, 15, 18], [163, 251, 15, 18], [491, 33, 16, 20], [491, 247, 16, 20]],
-  BRK: [[183, 33, 14, 14], [183, 253, 14, 14], [513, 36, 16, 14], [513, 250, 16, 14], [230, 130, 11, 8]],
-  STE: [[170, 142, 54, 16], [288, 139, 12, 22]],
-  PWT: [[408, 130, 74, 40], [302, 179, 46, 10]],
-  CVT: [[506, 138, 28, 24], [514, 76, 12, 52], [514, 172, 12, 52]],
-  ELE: [[392, 132, 22, 26], [552, 108, 10, 20]],
+  WHE: [[163, 29, 15, 20], [163, 251, 15, 20], [491, 34, 15, 20], [491, 246, 15, 20]],
+  BRK: [[183, 33, 14, 14], [183, 253, 14, 14], [513, 38, 14, 14], [513, 248, 14, 14], [212, 130, 11, 8]],
+  STE: [[218, 143, 24, 14], [266, 141, 11, 18]],
+  PWT: [[454, 118, 42, 64], [298, 183, 44, 9]],
+  CVT: [[506, 136, 26, 28], [513, 118, 12, 14], [513, 168, 12, 14]],
+  ELE: [[432, 134, 16, 32], [546, 112, 12, 12]],
   // Starts past the steering wheel, which sits inside the cockpit opening.
-  ERG: [[306, 136, 56, 28]]
+  ERG: [[286, 132, 70, 36]]
 };
 type Code = (typeof REGION_ORDER)[number];
 
@@ -207,182 +207,194 @@ export function BuildSchematic({ readiness }: { readiness: Record<string, Subsys
         strokeLinecap="round"
         fill="none"
       >
-        {/* Geometry notes: wheelbase 190->520, front track +/-110, rear +/-105,
-            matching the 1600 mm / 1270 / 1219 vehicle targets at roughly 1px =
-            4.8mm. A formula car is a NARROW tub with the wheels well outboard —
-            drawing the body wide makes it read as a sports car. */}
+        {/* GEOMETRY. Traced from Warp Speed Racing's own SolidWorks top view of
+            the chassis, not approximated. The frame stations are taken off that
+            drawing as fractions of its overall length and mapped onto the
+            vehicle targets: 1600 mm wheelbase over 331px (front axle x=190,
+            rear x=521), 1270/1219 track, so roughly 1px = 4.83 mm.
 
-        {/* Geometry notes. Top view, nose at the left, 1600 mm wheelbase over
-            330px so roughly 1px = 4.8mm. Front axle x=190, rear x=521; front
-            track +/-110 and rear +/-105 against the 1270/1219 targets.
+              x=100  front bulkhead
+              x=172  front bulkhead support
+              x=242  front hoop
+              x=394  main hoop        (the frame is widest here)
+              x=449  rear of the hoop bracing
+              x=477  rear bay forward station
+              x=560  back of the frame
 
-            A formula car in plan view is three things: a very NARROW tub, wheels
-            a long way outboard of it, and wings that span most of the track.
-            The first draft of this got all three wrong — a wide hull with
-            narrow wings reads as a sports car, which is what it looked like. */}
+            Three earlier versions were drawn from imagination and all three
+            read as the wrong kind of car — the giveaway every time was the tub,
+            which guesswork makes too wide and too parallel. A real spaceframe
+            is narrow at the nose and opens steadily to the main hoop. */}
 
         {/* ---------- AERO: wings and sidepods ---------------------------- */}
         {region(
           "AER",
           <>
-            {/* Front wing. Thin fore-aft and spanning just inside the front
-                track — drawn deep, it reads as a wall rather than a wing. */}
-            <path d="M74 64 H92 V236 H74 Z" />
-            <path d="M74 110 H92 M74 150 H92 M74 190 H92" strokeWidth={0.9} />
-            <path d="M68 58 H80 V86 H68 Z" strokeWidth={1.3} />
-            <path d="M68 214 H80 V242 H68 Z" strokeWidth={1.3} />
-            {/* Rear wing, narrower span, behind the rear axle. */}
-            <path d="M588 78 H604 V222 H588 Z" />
-            <path d="M588 118 H604 M588 150 H604 M588 182 H604" strokeWidth={0.9} />
-            <path d="M582 72 H594 V98 H582 Z" strokeWidth={1.3} />
-            <path d="M582 202 H594 V228 H582 Z" strokeWidth={1.3} />
-            {/* Sidepods: small pods OUTBOARD of the tub, not a box around it. */}
-            <path d="M286 100 H368 L376 112 H286 Z" />
-            <path d="M286 200 H368 L376 188 H286 Z" />
+            <path d="M60 58 H78 V242 H60 Z" />
+            <path d="M60 104 H78 M60 150 H78 M60 196 H78" strokeWidth={0.9} />
+            <path d="M54 52 H66 V80 H54 Z" strokeWidth={1.3} />
+            <path d="M54 220 H66 V248 H54 Z" strokeWidth={1.3} />
+            <path d="M582 74 H598 V226 H582 Z" />
+            <path d="M582 112 H598 M582 150 H598 M582 188 H598" strokeWidth={0.9} />
+            <path d="M576 68 H588 V94 H576 Z" strokeWidth={1.3} />
+            <path d="M576 206 H588 V232 H576 Z" strokeWidth={1.3} />
+            {/* Sidepods sit OUTBOARD of the frame rails, which taper — so these
+                follow the taper rather than being parallel boxes. */}
+            <path d="M276 108 L380 92 L384 104 L276 120 Z" />
+            <path d="M276 192 L380 208 L384 196 L276 180 Z" />
           </>,
           8
         )}
 
-        {/* ---------- CHASSIS: nose, tub, bulkheads, hoops ----------------- */}
+        {/* ---------- CHASSIS: the spaceframe, traced from CAD ------------- */}
         {region(
           "CHS",
           <>
-            {/* Impact attenuator, then a nose that tapers back to the bulkhead. */}
-            <rect x={104} y={140} width={14} height={20} rx={2} strokeWidth={1.3} />
-            <path d="M118 142 L164 130 L164 170 L118 158 Z" />
-            {/* The tub: widest at the cockpit, tapering both ways. */}
-            <path d="M164 130 L242 124 L264 122 L386 122 L452 128 L520 138 L552 146
-                     L552 154 L520 162 L452 172 L386 178 L264 178 L242 176 L164 170 Z" />
-            <path d="M164 130 V170" strokeWidth={1.5} />
-            <path d="M264 122 V178" strokeWidth={1.7} />
-            <path d="M386 122 V178" strokeWidth={2.3} />
-            <path d="M452 128 V172" strokeWidth={1.3} />
+            {/* Impact attenuator ahead of the front bulkhead. */}
+            <rect x={86} y={138} width={14} height={24} rx={2} strokeWidth={1.3} />
+            {/* The frame rails. Narrow at the nose, opening to the main hoop,
+                then closing slightly through the rear bay. */}
+            <path d="M100 132 L172 124 L242 116 L394 98 L449 100 L477 105 L560 107
+                     L560 193 L477 195 L449 200 L394 202 L242 184 L172 176 L100 168 Z" />
+            {/* Bulkheads and hoops, weighted by how much they matter. */}
+            <path d="M100 132 V168" strokeWidth={1.5} />
+            <path d="M172 124 V176" strokeWidth={1.4} />
+            <path d="M242 116 V184" strokeWidth={1.9} />
+            <path d="M449 100 V200" strokeWidth={1.4} />
+            <path d="M477 105 V195" strokeWidth={1.2} />
+            <path d="M560 107 V193" strokeWidth={1.4} />
+            {/* Main hoop: the one bent tube on the car, and it reads as a curve
+                from above rather than a straight bulkhead. */}
+            <path d="M394 98 Q412 99 414 118 L414 182 Q412 201 394 202" strokeWidth={2.4} />
+            {/* X-bracing, bay by bay, as drawn in the CAD view. */}
+            <path d="M100 132 L172 176 M100 168 L172 124" strokeWidth={0.9} />
+            <path d="M172 124 L242 184 M172 176 L242 116" strokeWidth={0.9} />
+            <path d="M242 116 L394 202 M242 184 L394 98" strokeWidth={0.9} />
+            <path d="M477 105 L560 193 M477 195 L560 107" strokeWidth={0.9} />
+            {/* Main hoop bracing back into the rear bay. */}
+            <path d="M414 120 L477 105 M414 180 L477 195" strokeWidth={1} />
           </>,
           0
         )}
 
-        {/* ---------- ERGONOMICS: cockpit, seat, headrest, pedals ---------- */}
+        {/* ---------- ERGONOMICS: cockpit between the two hoops ------------ */}
         {region(
           "ERG",
           <>
-            <path d="M280 134 Q274 150 280 166 L378 166 Q384 150 378 134 Z" />
-            <ellipse cx={332} cy={150} rx={28} ry={15} />
-            <rect x={368} y={138} width={14} height={24} rx={3} strokeWidth={1.3} />
-            <rect x={206} y={140} width={22} height={20} rx={3} />
+            {/* The opening sits between the front hoop and the main hoop,
+                because that is literally where the driver is. */}
+            <path d="M256 126 Q250 150 256 174 L384 182 Q392 150 384 118 Z" />
+            <ellipse cx={322} cy={150} rx={30} ry={17} />
+            <rect x={372} y={136} width={14} height={28} rx={3} strokeWidth={1.3} />
+            {/* Pedal box forward of the front hoop, in the nose bay. */}
+            <rect x={188} y={140} width={22} height={20} rx={3} />
           </>,
           5
         )}
 
-        {/* ---------- STEERING: wheel, column, rack, tie rods -------------- */}
+        {/* ---------- STEERING: wheel, column, rack ahead of the hoop ------ */}
         {region(
           "STE",
           <>
-            <rect x={290} y={139} width={7} height={22} rx={3.5} />
-            <path d="M290 150 H262" strokeWidth={1.4} />
-            {/* Rack ahead of the front bulkhead, tie rods out to each upright. */}
-            <path d="M166 142 H228 V158 H166" strokeWidth={1.4} />
-            <path d="M166 143 L186 62 M166 157 L186 238" strokeWidth={1.3} />
+            <rect x={268} y={140} width={7} height={20} rx={3.5} />
+            <path d="M268 150 H244" strokeWidth={1.3} />
+            <path d="M216 143 H244 V157 H216" strokeWidth={1.3} />
+            <path d="M214 144 L188 70 M214 156 L188 230" strokeWidth={1.2} />
           </>,
           6
         )}
 
-        {/* ---------- POWERTRAIN: engine, intake, exhaust, radiator -------- */}
+        {/* ---------- POWERTRAIN: engine in the rear bay ------------------- */}
         {region(
           "PWT",
           <>
-            <rect x={406} y={128} width={78} height={44} rx={4} />
-            <path d="M424 128 V116 h10 v12 M452 128 V116 h10 v12" strokeWidth={1.3} />
-            <rect x={420} y={104} width={44} height={12} rx={3} strokeWidth={1.2} />
-            <path d="M484 164 h26 q12 0 12 -10 v-6" strokeWidth={1.3} />
-            {/* Radiator in the left pod. */}
-            <rect x={300} y={178} width={50} height={12} rx={2} strokeWidth={1.2} />
-            <path d="M414 140 h62 M414 150 h62 M414 160 h62" strokeWidth={0.8} />
+            <rect x={452} y={116} width={46} height={68} rx={4} />
+            <path d="M462 116 V106 h10 v10 M482 116 V106 h10 v10" strokeWidth={1.2} />
+            <rect x={458} y={94} width={38} height={12} rx={3} strokeWidth={1.2} />
+            <path d="M498 176 h24 q10 0 10 -9 v-6" strokeWidth={1.3} />
+            {/* Radiator in the left pod, outboard of the rails. */}
+            <rect x={296} y={182} width={48} height={11} rx={2} strokeWidth={1.2} />
+            <path d="M460 128 h30 M460 150 h30 M460 172 h30" strokeWidth={0.8} />
           </>,
           3
         )}
 
-        {/* ---------- DRIVETRAIN: diff, half shafts, chain ----------------- */}
+        {/* ---------- DRIVETRAIN: diff on the rear axle, half shafts ------- */}
         {region(
           "CVT",
           <>
-            <rect x={504} y={136} width={32} height={28} rx={4} />
-            {/* Chain run from the engine sprocket to the diff. */}
-            <path d="M502 144 H504 M502 156 H504" strokeWidth={1.2} />
-            <path d="M498 140 H506 M498 160 H506" strokeWidth={1} />
-            {/* Half shafts out to each rear upright, laterally. */}
-            <path d="M520 136 V70 M520 164 V230" strokeWidth={1.8} />
-            {/* Tripod joints at each end. */}
-            <circle cx={520} cy={78} r={4} strokeWidth={1.2} />
-            <circle cx={520} cy={222} r={4} strokeWidth={1.2} />
+            <rect x={504} y={134} width={30} height={32} rx={4} />
+            <path d="M498 142 H504 M498 158 H504" strokeWidth={1.1} />
+            <path d="M519 134 V78 M519 166 V222" strokeWidth={1.8} />
+            <circle cx={519} cy={84} r={4} strokeWidth={1.2} />
+            <circle cx={519} cy={216} r={4} strokeWidth={1.2} />
           </>,
           4
         )}
 
-        {/* ---------- SUSPENSION: double wishbones and uprights ------------ */}
+        {/* ---------- SUSPENSION: wishbones off the frame nodes ------------ */}
         {region(
           "SUS",
           <>
-            {/* Front. Two arms per corner converging on the upright — the
-                pushrods and rockers were drawn in and just read as noise at
-                this size, so they are left out. */}
-            <path d="M166 134 L184 70 M230 130 L192 70" strokeWidth={1.3} />
-            <path d="M183 64 h12 V78 h-12 Z" strokeWidth={1.4} />
-            <path d="M166 166 L184 230 M230 170 L192 230" strokeWidth={1.3} />
-            <path d="M183 222 h12 V236 h-12 Z" strokeWidth={1.4} />
-            {/* Rear. */}
-            <path d="M458 132 L512 74 M548 146 L528 74" strokeWidth={1.3} />
-            <path d="M513 68 h14 V82 h-14 Z" strokeWidth={1.4} />
-            <path d="M458 168 L512 226 M548 154 L528 226" strokeWidth={1.3} />
-            <path d="M513 218 h14 V232 h-14 Z" strokeWidth={1.4} />
+            {/* Front: arms pick up on the bulkhead support and the front hoop,
+                which is where the CAD shows the nodes. */}
+            <path d="M166 126 L186 70 M236 118 L194 70" strokeWidth={1.3} />
+            <path d="M184 64 h14 V78 h-14 Z" strokeWidth={1.4} />
+            <path d="M166 174 L186 230 M236 182 L194 230" strokeWidth={1.3} />
+            <path d="M184 222 h14 V236 h-14 Z" strokeWidth={1.4} />
+            {/* Rear: off the rear bay stations. */}
+            <path d="M479 104 L513 80 M558 108 L527 80" strokeWidth={1.3} />
+            <path d="M512 72 h14 V86 h-14 Z" strokeWidth={1.4} />
+            <path d="M479 196 L513 220 M558 192 L527 220" strokeWidth={1.3} />
+            <path d="M512 214 h14 V228 h-14 Z" strokeWidth={1.4} />
           </>,
           1
         )}
 
-        {/* ---------- WHEELS AND TYRES: 13in, front narrower than rear ----- */}
+        {/* ---------- WHEELS: front track wider than rear ------------------ */}
         {region(
           "WHE",
           <>
             <rect x={162} y={28} width={56} height={24} rx={7} />
             <rect x={162} y={248} width={56} height={24} rx={7} />
-            <rect x={490} y={30} width={62} height={26} rx={7} />
-            <rect x={490} y={244} width={62} height={26} rx={7} />
-            {/* Tread lines, so a tyre reads as a tyre and not a pill. */}
+            <rect x={490} y={33} width={60} height={24} rx={7} />
+            <rect x={490} y={243} width={60} height={24} rx={7} />
             <path d="M176 28 V52 M190 28 V52 M204 28 V52" strokeWidth={0.8} />
             <path d="M176 248 V272 M190 248 V272 M204 248 V272" strokeWidth={0.8} />
-            <path d="M506 30 V56 M521 30 V56 M536 30 V56" strokeWidth={0.8} />
-            <path d="M506 244 V270 M521 244 V270 M536 244 V270" strokeWidth={0.8} />
+            <path d="M505 33 V57 M520 33 V57 M535 33 V57" strokeWidth={0.8} />
+            <path d="M505 243 V267 M520 243 V267 M535 243 V267" strokeWidth={0.8} />
           </>,
           2
         )}
 
-        {/* ---------- BRAKES: discs, calipers, master cylinders ------------ */}
+        {/* ---------- BRAKES: discs at each wheel, masters at the pedals --- */}
         {region(
           "BRK",
           <>
             <circle cx={190} cy={40} r={9} />
             <circle cx={190} cy={260} r={9} />
-            <circle cx={521} cy={43} r={10} />
-            <circle cx={521} cy={257} r={10} />
+            <circle cx={520} cy={45} r={9} />
+            <circle cx={520} cy={255} r={9} />
             <rect x={197} y={34} width={6} height={12} rx={2} strokeWidth={1.2} />
             <rect x={197} y={254} width={6} height={12} rx={2} strokeWidth={1.2} />
-            <rect x={529} y={37} width={7} height={12} rx={2} strokeWidth={1.2} />
-            <rect x={529} y={251} width={7} height={12} rx={2} strokeWidth={1.2} />
-            <rect x={230} y={130} width={11} height={8} rx={2} />
-            <rect x={230} y={162} width={11} height={8} rx={2} />
+            <rect x={527} y={39} width={6} height={12} rx={2} strokeWidth={1.2} />
+            <rect x={527} y={249} width={6} height={12} rx={2} strokeWidth={1.2} />
+            <rect x={212} y={130} width={11} height={8} rx={2} />
+            <rect x={212} y={162} width={11} height={8} rx={2} />
           </>,
           7
         )}
 
-        {/* ---------- ELECTRICAL: accumulator, harness, shutdown ----------- */}
+        {/* ---------- ELECTRICAL: box behind the main hoop ----------------- */}
         {region(
           "ELE",
           <>
-            <rect x={390} y={130} width={26} height={30} rx={3} />
-            <path d="M390 145 H380" strokeWidth={1.3} />
-            <path d="M400 130 V116 H548" strokeDasharray="5 4" strokeWidth={1} />
-            <circle cx={556} cy={116} r={5} />
-            <circle cx={556} cy={184} r={5} />
-            <path d="M400 160 V184 H548" strokeDasharray="5 4" strokeWidth={1} />
+            <rect x={430} y={132} width={20} height={36} rx={3} />
+            <path d="M430 150 H422" strokeWidth={1.3} />
+            <path d="M440 132 V118 H546" strokeDasharray="5 4" strokeWidth={1} />
+            <path d="M440 168 V182 H546" strokeDasharray="5 4" strokeWidth={1} />
+            <circle cx={552} cy={118} r={4} />
+            <circle cx={552} cy={182} r={4} />
           </>,
           9
         )}
@@ -421,7 +433,7 @@ export function BuildSchematic({ readiness }: { readiness: Record<string, Subsys
           </>
         ) : (
           <p className="text-[11px] text-graphite-500 leading-relaxed">
-            Schematic, not a model of the car — proportions follow the vehicle targets. Click a region to open that
+            Frame traced from the team&rsquo;s CAD top view; everything else is schematic. Click a region to open that
             subsystem. Green is every gate closed, orange is in progress, amber is held by an open critical interface,
             dim is nothing entered yet.
           </p>
